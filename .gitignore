@@ -1,0 +1,6 @@
+__pycache__/
+artifacts/
+checkpoints/
+op_data/
+op_results/
+images/
