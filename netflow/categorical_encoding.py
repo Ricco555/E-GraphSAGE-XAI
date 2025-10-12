@@ -12,27 +12,6 @@ import joblib
 from scipy import sparse
 from sklearn.preprocessing import OneHotEncoder
 
-from packaging.version import Version
-import sklearn
-
-def _make_ohe(dtype=np.float32, handle_unknown="ignore"):
-    """Create OneHotEncoder compatible with both old (sparse=) and new (sparse_output=) sklearn."""
-    ver = Version(sklearn.__version__)
-    if ver >= Version("1.2"):
-        # New API: sparse_output
-        return OneHotEncoder(
-            handle_unknown=handle_unknown,
-            sparse_output=True,
-            dtype=dtype,
-        )
-    else:
-        # Old API: sparse
-        return OneHotEncoder(
-            handle_unknown=handle_unknown,
-            sparse=True,
-            dtype=dtype,
-        )
-
 # ---------------------------
 # Port bucketing (optional)
 # ---------------------------
@@ -150,7 +129,7 @@ def fit_categorical_transform(
       - Optionally bucket ports to reduce cardinality.
       - Normalize to string dtype, strip whitespace.
       - Optionally collapse rare categories to `rare_token` (by `top_k` and/or `min_freq`).
-      - Fit OneHotEncoder(sparse=True, handle_unknown='ignore', dtype=float32).
+      - Fit OneHotEncoder(sparse_output=True, handle_unknown='ignore', dtype=float32).
       - Persist encoder + metadata; return TRAIN CSR matrix.
 
     Returns (Xcat_train_csr, CatArtifacts)
@@ -192,7 +171,7 @@ def fit_categorical_transform(
                     df_collapsed.loc[ix, c] = rare_token
 
     # 5) Fit OneHotEncoder
-    ohe = _make_ohe(dtype=np.float32, handle_unknown="ignore")
+    ohe = OneHotEncoder(dtype=np.float32, sparse_output=True, handle_unknown="ignore")
     Xcat_train = ohe.fit_transform(df_collapsed)
 
     # 6) Persist artifacts
