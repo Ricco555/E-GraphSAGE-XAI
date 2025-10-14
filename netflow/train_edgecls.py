@@ -189,7 +189,6 @@ def parse_args():
     return ap.parse_args()
 
 def main(args):
-    args = parse_args()
     run_training(args)
 
 if __name__ == "__main__":
