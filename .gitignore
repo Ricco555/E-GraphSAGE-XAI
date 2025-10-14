@@ -1,5 +1,7 @@
 __pycache__/
 artifacts/
+feature_store/
+graphs/
 checkpoints/
 op_data/
 op_results/
