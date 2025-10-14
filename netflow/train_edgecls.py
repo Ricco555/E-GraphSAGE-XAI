@@ -6,7 +6,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import dgl
-from dgl.dataloading import NeighborSampler, as_edge_prediction_sampler, DataLoader
+from dgl.dataloading import NeighborSampler, as_edge_prediction_sampler
+from dgl.dataloading import DataLoader as DGLDataLoader
 
 # === parts created in previous steps ===
 from feature_store import fetch_edge_features
@@ -25,7 +26,10 @@ class _FallbackEdgeGraphSAGE(nn.Module):
         self.sage = nn.ModuleList()
         self.norms = nn.ModuleList()
         for li in range(num_layers):
-            in_dim = in_node if li == 0 else hidden
+            if li == 0:
+                in_dim = in_node if in_node > 0 else hidden
+            else:
+                in_dim = hidden
             self.sage.append(dglnn.SAGEConv(in_dim, hidden, aggregator_type=aggregator))
             self.norms.append(nn.BatchNorm1d(hidden))
         self.use_dummy_nodes = (in_node == 0)
@@ -39,9 +43,11 @@ class _FallbackEdgeGraphSAGE(nn.Module):
         )
 
     def forward(self, blocks, x_nodes, pair_graph, e_feat):
-        h = x_nodes
-        if h.numel() == 0:
-            h = self.node_embed.weight[0].expand(blocks[0].num_src_nodes(), -1)
+        if x_nodes is None:
+            # No node features → use learned constant of size `hidden`
+            h = self.node_embed.weight[0].expand(blocks[0].num_src_nodes(), self.node_embed.embedding_dim)
+        else:
+            h = x_nodes
         for conv, bn, block in zip(self.sage, self.norms, blocks):
             h_dst = h[:block.num_dst_nodes()]
             h = conv(block, (h, h_dst))
@@ -54,34 +60,42 @@ class _FallbackEdgeGraphSAGE(nn.Module):
 
 # ---------- dataloader (edge mode) ----------
 def make_edge_loader(g: dgl.DGLGraph, batch_size=2048, fanouts=(15, 10),
-                     shuffle=True, num_workers=0, seed=42, device='cpu') -> DataLoader:
+                    shuffle=True, num_workers=0, seed=42):
     base = NeighborSampler(list(fanouts))
-    sampler = as_edge_prediction_sampler(base)  # yields (input_nodes, pair_graph, blocks)
+    sampler = as_edge_prediction_sampler(base)  # edge mode
     eids = torch.arange(g.num_edges(), dtype=torch.int64)
     gen = torch.Generator().manual_seed(seed)
-    loader = DataLoader(
+    loader = DGLDataLoader(
         g, eids, sampler,
-        batch_size=batch_size, shuffle=shuffle, drop_last=False,
-        num_workers=num_workers, use_ddp=False, generator=gen, device=device,
-        persistent_workers=False, pin_memory=False,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        drop_last=False,
+        num_workers=num_workers,   # keep 0 on Windows
+        use_ddp=False,
+        generator=gen,
     )
     return loader
 
 # ---------- one epoch ----------
-def run_epoch(model, loader: DataLoader, g: dgl.DGLGraph, split_dir: str, device, optim=None, criterion=None):
+def run_epoch(model, loader: DGLDataLoader, g: dgl.DGLGraph, split_dir: str, device, optim=None, criterion=None):
     train = optim is not None
     model.train(train)
     total_loss = 0.0
     total_correct = 0
     total = 0
     for input_nodes, pair_graph, blocks in loader:
-        # if device was set in DataLoader, blocks/pair_graph arrive on device already
-        if blocks[0].device != torch.device(device):
+        #DGL DataLoader now yields CPU tensors; move explicitly to target device
+        if blocks and (blocks[0].device.type != torch.device(device).type):
             blocks = [b.to(device) for b in blocks]
+        if pair_graph.device.type != torch.device(device).type:
             pair_graph = pair_graph.to(device)
 
-        # node features (optional)
-        x_nodes = g.ndata.get("x", torch.empty(blocks[0].num_src_nodes(), 0)).to(device)
+        # node features (optional). If missing, pass None (model will inject a learned constant).
+        if "x" in g.ndata and g.ndata["x"].numel() > 0:
+            # Gather only the features needed for this mini-batch
+            x_nodes = g.ndata["x"][input_nodes].to(device)   # shape: [blocks[0].num_src_nodes(), d_node]
+        else:
+            x_nodes = None  # model will inject learned constant
 
         # edge features by GLOBAL EIDs
         global_eids = pair_graph.edata[dgl.EID].cpu().numpy()
@@ -128,9 +142,15 @@ def run_training(args: argparse.Namespace | SimpleNamespace):
 
     # model
     device = torch.device(args.device)
+    # --- infer node feature dim (in_node) ---
+    if "x" in g_train.ndata and g_train.ndata["x"].numel() > 0:
+        in_node = int(g_train.ndata["x"].shape[1])
+    else:
+        in_node = 0
+
     ModelClass = EdgeGraphSAGE if EdgeGraphSAGE is not None else _FallbackEdgeGraphSAGE
     model = ModelClass(
-        in_node=0, hidden=args.hidden, num_layers=args.layers, aggregator=args.aggregator,
+        in_node=in_node, hidden=args.hidden, num_layers=args.layers, aggregator=args.aggregator,
         edge_in=edge_in, edge_mlp_hidden=args.edge_mlp_hidden, num_classes=num_classes,
         dropout=args.dropout
     ).to(device)
@@ -146,11 +166,9 @@ def run_training(args: argparse.Namespace | SimpleNamespace):
     # loaders
     fanouts = tuple(int(x) for x in args.fanouts.split(","))
     train_loader = make_edge_loader(g_train, batch_size=args.batch_size, fanouts=fanouts,
-                                    shuffle=True, num_workers=args.num_workers, seed=args.seed,
-                                    device="cpu")  # keep sampling on CPU for stability
+                                    shuffle=True, num_workers=args.num_workers, seed=args.seed)
     val_loader   = make_edge_loader(g_val,   batch_size=args.batch_size, fanouts=fanouts,
-                                    shuffle=False, num_workers=args.num_workers, seed=args.seed,
-                                    device="cpu")
+                                    shuffle=False, num_workers=args.num_workers, seed=args.seed)
 
     best_val = -1.0
     for ep in range(1, args.epochs + 1):
@@ -188,9 +206,6 @@ def parse_args():
     ap.add_argument("--seed", default=42, type=int)
     return ap.parse_args()
 
-def main(args):
-    run_training(args)
-
 if __name__ == "__main__":
     args = parse_args()
     run_training(args)
@@ -210,7 +225,7 @@ python train_edgecls.py \
 
 # Run from Jupyter notebook:
 
-  from types import SimpleNamespace
+from types import SimpleNamespace
 from train_edgecls import run_training
 
 args = SimpleNamespace(
