@@ -1,6 +1,6 @@
 # debug_align.py
 from __future__ import annotations
-import os, numpy as np, dgl
+import os, numpy as np, torch, dgl
 
 def check_graph_vs_store(g: dgl.DGLGraph, split_dir: str, *, verbose=True) -> np.ndarray:
     """
