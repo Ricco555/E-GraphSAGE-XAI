@@ -10,6 +10,7 @@ from dgl.dataloading import NeighborSampler, as_edge_prediction_sampler
 from dgl.dataloading import DataLoader as DGLDataLoader  # avoid torch DataLoader clash
 
 from feature_store import fetch_edge_features
+from debug_align import check_graph_vs_store, _map_global_to_local
 
 # Try to import your model; if unavailable, use a fallback.
 try:
@@ -119,6 +120,16 @@ def run_epoch(model, loader: DGLDataLoader, g: dgl.DGLGraph, split_dir: str, dev
 
         # Edge features for this batch (dense, from feature store by GLOBAL EIDs)
         global_eids = pair_graph.edata[dgl.EID].cpu().numpy()
+
+        #
+        store_eids = np.load(os.path.join(split_dir, "edge_indices.npy")).astype(np.int64)
+        present = np.isin(global_eids.astype(np.int64), store_eids, assume_unique=False)
+        if not present.all():
+            missing = global_eids[~present]
+            raise RuntimeError(
+                f"[batch-align] {missing.size} batch EIDs not in {split_dir}. First few: {missing[:10].tolist()}"
+            )
+
         e_feat_np = fetch_edge_features(global_eids, split_dir)  # (B, d_edge)
         e_feat = torch.from_numpy(e_feat_np).to(device)
 
@@ -177,6 +188,10 @@ def run_training(args: argparse.Namespace | SimpleNamespace):
     g_train = dgl.load_graphs(os.path.join(args.graphs_dir, "train.bin"))[0][0]
     g_val   = dgl.load_graphs(os.path.join(args.graphs_dir, "val.bin"))[0][0]
 
+    # 1) Preflight: verify graph ↔ store consistency; get the store’s GLOBAL EIDs
+    store_train_ids = check_graph_vs_store(g_train, fs_train, verbose=True)
+    store_val_ids   = check_graph_vs_store(g_val,   fs_val,   verbose=True)
+    
     # Infer edge feature dim if needed
     if args.edge_in == 0:
         sample_eid = g_train.edata[dgl.EID][:1].cpu().numpy()
@@ -258,15 +273,27 @@ def run_training(args: argparse.Namespace | SimpleNamespace):
                                        shuffle=True, num_workers=args.num_workers, seed=args.seed)
     val_loader_fn   = make_edge_loader(g_val,   batch_size=args.batch_size, fanouts=fanouts,
                                        shuffle=False, num_workers=args.num_workers, seed=args.seed)
-    eids_train = torch.arange(g_train.num_edges(), dtype=torch.int64)
-    eids_val_all = torch.arange(g_val.num_edges(), dtype=torch.int64)
+    # eids_train = torch.arange(g_train.num_edges(), dtype=torch.int64)
+    # eids_val_all = torch.arange(g_val.num_edges(), dtype=torch.int64)
+    #eids_train = g_train.edata[dgl.EID].cpu().numpy()
+    #eids_val_all = g_val.edata[dgl.EID].cpu().numpy()
+
     keep_val = (g_val.edata["y"] >= 0)
     if keep_val.sum().item() == 0:
         raise RuntimeError("[labels] After remap, VAL has 0 edges with known labels.")
     eids_val = eids_val_all[keep_val]
 
-    train_loader = train_loader_fn(eids_train)
-    val_loader   = val_loader_fn(eids_val)
+    #train_loader = train_loader_fn(eids_train)
+    #val_loader   = val_loader_fn(eids_val)
+
+    # Map store GLOBAL → graph LOCAL ids
+    eids_train_local = _map_global_to_local(g_train, fs_train)
+    eids_val_local   = _map_global_to_local(g_val,   fs_val)
+    train_loader = train_loader_fn(eids_train_local)
+    val_loader   = val_loader_fn(eids_val_local)
+    # Run the check right after creation:
+    assert_loader_seed_alignment(g_train, eids_train_local, os.path.join(args.feature_store, "train"), name="train")
+    assert_loader_seed_alignment(g_val,   eids_val_local,   os.path.join(args.feature_store, "val"),   name="val")
 
     # Optional first-batch inspection
     if getattr(args, "debug", False):
@@ -291,7 +318,39 @@ def run_training(args: argparse.Namespace | SimpleNamespace):
     print(f"Best val acc: {best_val:.4f}")
     return {"best_val_acc": float(best_val), "edge_in": edge_in, "fanouts": fanouts}
 
+# ---------------- Helper ----------------
+def assert_loader_seed_alignment(g: dgl.DGLGraph, eids_local: torch.Tensor, split_dir: str, *, name: str):
+    """
+    g: graph used by the loader
+    eids_local: the EXACT tensor of local edge IDs you passed to DataLoader
+    split_dir: feature_store/<split> directory (has edge_indices.npy)
+    name: a label for logs ('train' or 'val')
+    """
+    # 1) what the store says belongs to this split (GLOBAL EIDs)
+    store_eids = np.load(os.path.join(split_dir, "edge_indices.npy")).astype(np.int64)
 
+    # 2) what the loader will iterate (LOCAL -> GLOBAL)
+    eids_local_np = eids_local.cpu().numpy().astype(np.int64)
+    loader_global = g.edata[dgl.EID][torch.from_numpy(eids_local_np)].cpu().numpy().astype(np.int64)
+
+    # 3) membership and shape sanity
+    missing = np.setdiff1d(loader_global, store_eids, assume_unique=False)
+    extra   = np.setdiff1d(store_eids, loader_global, assume_unique=False)
+
+    print(f"[seed-check:{name}] seeds(local)={eids_local_np.size}  store={store_eids.size}")
+    print(f"[seed-check:{name}] missing_in_store={missing.size}  extra_in_store={extra.size}")
+
+    # Strong condition (best): the loader seeds are EXACTLY the store EIDs (same set).
+    # If you expect to use ALL store edges for this split, enforce equality:
+    assert missing.size == 0, f"[{name}] Some loader seeds (GLOBAL) are not in {split_dir}. First: {missing[:10].tolist()}"
+    # If you want equality (not just subset), also assert extra.size == 0.
+    # assert extra.size == 0, f"[{name}] Store has edges not covered by loader seeds. First: {extra[:10].tolist()}"
+
+    # Optional: prove we're not accidentally using positional IDs (0..E-1) as GLOBAL IDs
+    if np.array_equal(loader_global, eids_local_np):
+        print(f"[seed-check:{name}] WARNING: loader 'GLOBAL' IDs equal local indices; "
+              "this would indicate you're not mapping local->global. Double-check.")
+        
 # ---------------- CLI ----------------
 def parse_args():
     ap = argparse.ArgumentParser()

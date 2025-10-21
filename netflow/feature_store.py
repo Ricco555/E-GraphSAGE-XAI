@@ -61,6 +61,45 @@ def _map_global_to_local(eids_global: np.ndarray, ids_sorted: np.ndarray, order:
     local[in_range] = order[pos[in_range]]
     return local
 
+# Call this once per split after you save edge_indices.npy
+def build_id_map(split_dir: str) -> None:
+    """
+    Persist a sorted index for global EIDs in this split so we can map any batch of
+    global EIDs -> local row indices exactly and quickly.
+    Saves: split_dir/eid_map.npz  with arrays: 'global_sorted', 'rows_sorted'
+    """
+    edge_indices = np.load(os.path.join(split_dir, "edge_indices.npy"))  # shape (N,)
+    rows = np.arange(edge_indices.shape[0], dtype=np.int64)
+    order = np.argsort(edge_indices, kind="mergesort")
+    global_sorted = edge_indices[order]
+    rows_sorted = rows[order]
+    np.savez_compressed(os.path.join(split_dir, "eid_map.npz"),
+                        global_sorted=global_sorted, rows_sorted=rows_sorted)
+
+def _load_id_map(split_dir: str) -> Tuple[np.ndarray, np.ndarray]:
+    z = np.load(os.path.join(split_dir, "eid_map.npz"))
+    return z["global_sorted"], z["rows_sorted"]
+
+def map_eids_to_rows(eids_global: np.ndarray, split_dir: str) -> np.ndarray:
+    """
+    Map a vector of GLOBAL EIDs (from pair_graph.edata[dgl.EID]) to LOCAL row indices
+    in this split's feature arrays. Returns an array of length B (batch), one row per input EID.
+    Raises a clear error if any EID is missing (misalignment).
+    """
+    global_sorted, rows_sorted = _load_id_map(split_dir)
+    idx = np.searchsorted(global_sorted, eids_global)
+    # Guard: idx in-bounds and matches value
+    in_bounds = (idx >= 0) & (idx < global_sorted.shape[0])
+    ok = in_bounds & (global_sorted[idx] == eids_global)
+    if not np.all(ok):
+        missing = eids_global[~ok]
+        raise RuntimeError(
+            f"[feature_store] Missing {missing.size} EIDs in split={split_dir}. "
+            f"First few: {missing[:10].tolist()}. "
+            "This indicates a split/graph/feature alignment issue. "
+            "Rebuild the graph and feature_store consistently."
+        )
+    return rows_sorted[idx]
 
 # ---------- public build API ----------
 
@@ -167,6 +206,10 @@ def build_feature_store(
     print(f"[feature_store] train: n={shapes['train'][0]} d_num={shapes['train'][1]} d_cat={shapes['train'][2]}")
     print(f"[feature_store] val  : n={shapes['val'][0]}   d_num={shapes['val'][1]}   d_cat={shapes['val'][2]}")
     print(f"[feature_store] test : n={shapes['test'][0]}  d_num={shapes['test'][1]}  d_cat={shapes['test'][2]}")
+    
+    # build global->local eid maps for fast batch lookup
+    for s in ("train", "val", "test"):
+        build_id_map(os.path.join(out_dir, s))
 
     return shapes
 
@@ -196,30 +239,23 @@ def _load_fastmap(split_dir: str) -> Tuple[np.ndarray, np.ndarray]:
 
 def fetch_edge_features(eids_global: np.ndarray, split_dir: str) -> np.ndarray:
     """
-    Given GLOBAL edge IDs for this split, return a dense float32 (B, d_edge)
-    by concatenating numeric memmap rows with categorical CSR rows (toarray()).
-    Any eids not present in this split are ignored (dropped).
+    Strictly fetch features for a batch of GLOBAL EIDs, in the same order, 1 row per EID.
+    Requires that build_id_map(split_dir) was called during feature store creation.
     """
-    eids_global = np.asarray(eids_global, dtype=np.int64)
-    ids_sorted, order = _load_fastmap(split_dir)
-    local = _map_global_to_local(eids_global, ids_sorted, order)
+    local_rows = map_eids_to_rows(eids_global, split_dir)  # length B
 
-    keep = (local >= 0)
-    if not keep.any():
-        return np.zeros((0, 0), dtype=np.float32)
+    Xnum = _load_numeric_memmap(split_dir)  # (N, d_num)
+    x_num = Xnum[local_rows]               # (B, d_num)
 
-    local_rows = local[keep]
-
-    Xnum = _load_numeric_memmap(split_dir)
-    x_num = Xnum[local_rows]  # (B, d_num)
-
-    Xcat = _load_cat_csr(split_dir)      # (N, d_cat)
+    Xcat = _load_cat_csr(split_dir)         # (N, d_cat) CSR (may be 0 cols)
     if Xcat.shape[1] > 0:
-        x_cat = Xcat[local_rows].toarray().astype(np.float32, copy=False)
+        x_cat = Xcat[local_rows].toarray().astype(np.float32, copy=False)  # (B, d_cat)
     else:
         x_cat = np.zeros((local_rows.shape[0], 0), dtype=np.float32)
 
-    return np.hstack([x_num, x_cat]).astype(np.float32, copy=False)
+    x = np.hstack([x_num, x_cat]).astype(np.float32, copy=False)
+    assert x.shape[0] == eids_global.shape[0], "Feature batch must match EID batch size"
+    return x
 
 """ How to use: 
 from feature_store import build_feature_store
