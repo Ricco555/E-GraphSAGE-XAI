@@ -124,7 +124,13 @@ def run_epoch(model, loader: DGLDataLoader, g: dgl.DGLGraph, split_dir: str, dev
         # 2) map LOCAL edge ids -> GLOBAL flow ids via the split’s edge index array
         #    (edge_indices.npy is aligned with g’s local edge order)
         store_eids = np.load(os.path.join(split_dir, "edge_indices.npy")).astype(np.int64)
-        global_eids = store_eids[local_eids]   # vectorized mapping
+        global_eids = g.edata[dgl.EID][torch.from_numpy(local_eids)].cpu().numpy().astype(np.int64)
+        # (optional debug—prove mapping == store mapping exactly)
+        if debug:
+            store_eids = np.load(os.path.join(split_dir, "edge_indices.npy")).astype(np.int64)
+            assert np.array_equal(global_eids, store_eids[local_eids]), \
+                "[debug] graph-based global_eids != store_eids[local_eids] (should never happen)"
+        
         present = np.isin(global_eids, store_eids)
         if not present.all():
             bad = global_eids[~present][:10]
