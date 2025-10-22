@@ -118,23 +118,23 @@ def run_epoch(model, loader: DGLDataLoader, g: dgl.DGLGraph, split_dir: str, dev
         else:
             x_nodes = None
 
-        # Edge features for this batch (dense, from feature store by GLOBAL EIDs)
-        global_eids = pair_graph.edata[dgl.EID].cpu().numpy()
+        # 1) get LOCAL edge ids of the sampled edges (these are parent graph internal IDs)
+        local_eids = pair_graph.edata[dgl.EID].to('cpu').numpy().astype(np.int64)
 
-        #
+        # 2) map LOCAL edge ids -> GLOBAL flow ids via the split’s edge index array
+        #    (edge_indices.npy is aligned with g’s local edge order)
         store_eids = np.load(os.path.join(split_dir, "edge_indices.npy")).astype(np.int64)
-        present = np.isin(global_eids.astype(np.int64), store_eids, assume_unique=False)
+        global_eids = store_eids[local_eids]   # vectorized mapping
+        present = np.isin(global_eids, store_eids)
         if not present.all():
-            missing = global_eids[~present]
-            raise RuntimeError(
-                f"[batch-align] {missing.size} batch EIDs not in {split_dir}. First few: {missing[:10].tolist()}"
-            )
+            bad = global_eids[~present][:10]
+            raise RuntimeError(f"[batch-align] {bad.size} global ids not found in store: {bad.tolist()}")
 
         e_feat_np = fetch_edge_features(global_eids, split_dir)  # (B, d_edge)
         e_feat = torch.from_numpy(e_feat_np).to(device)
 
-        # Labels aligned by GLOBAL EIDs
-        y = g.edata["y"][pair_graph.edata[dgl.EID]].to(device)
+        # Labels aligned by LOCAL ids
+        y = g.edata["y"][torch.from_numpy(local_eids)].to(device)
 
         if debug and bidx == 0:
             logging.debug(f"[DBG] batch={bidx} B={pair_graph.num_edges()} k={len(blocks)}")
