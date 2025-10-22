@@ -1,7 +1,7 @@
 # feature_store.py
 from __future__ import annotations
 
-import os
+import os, torch, dgl
 from typing import Tuple, Optional, Dict
 
 import numpy as np
@@ -33,33 +33,37 @@ def _save_csr(path: str, X_csr: sparse.csr_matrix) -> None:
 def _load_csr(path: str) -> sparse.csr_matrix:
     return sparse.load_npz(path)
 
+def _map_global_to_local(g: dgl.DGLGraph, split_dir: str, require_full_cover: bool = True) -> torch.Tensor:
+    """
+    Map the split's GLOBAL edge IDs (feature_store/<split>/edge_indices.npy) to this graph's
+    LOCAL edge IDs (0..E-1). Returns a torch.int64 tensor ordered exactly like the store file.
 
-def _save_id_fastmap(out_path: str, ids: np.ndarray) -> None:
+    If require_full_cover=True, raise if any store EID is not present in the graph.
     """
-    Given global edge IDs for this split (row order), save arrays so we can map
-    global eids -> local row indices quickly:
-       - ids_sorted: sorted copy of ids
-       - order: array s.t. order[rank(global_id)] = local_row
-    """
-    ids = ids.astype(np.int64, copy=False)
-    order = np.empty_like(ids)
-    # argsort over ids gives ranks; place local row positions at those ranks
-    ranks = np.argsort(ids, kind="mergesort")
-    order[ranks] = np.arange(ids.shape[0], dtype=np.int64)
-    ids_sorted = np.sort(ids, kind="mergesort")
-    np.savez_compressed(out_path, ids_sorted=ids_sorted, order=order)
+    # 1) GLOBAL EIDs from the feature store (this split)
+    store_global = np.load(os.path.join(split_dir, "edge_indices.npy")).astype(np.int64)
 
+    # 2) GLOBAL EIDs carried by the graph (one per LOCAL edge id)
+    g_global = g.edata[dgl.EID].cpu().numpy().astype(np.int64)  # shape (E_local,)
 
-def _map_global_to_local(eids_global: np.ndarray, ids_sorted: np.ndarray, order: np.ndarray) -> np.ndarray:
-    """
-    Map global edge IDs to local row indices.
-    Returns -1 for any ID not found.
-    """
-    pos = np.searchsorted(ids_sorted, eids_global)
-    in_range = (pos < ids_sorted.shape[0]) & (ids_sorted[pos] == eids_global)
-    local = np.full(eids_global.shape[0], -1, dtype=np.int64)
-    local[in_range] = order[pos[in_range]]
-    return local
+    # 3) Build a fast lookup: sort graph-global once, then search positions of store ids
+    order = np.argsort(g_global, kind="mergesort")
+    g_sorted = g_global[order]
+    pos = np.searchsorted(g_sorted, store_global)  # candidate positions in sorted array
+    ok = (pos < g_sorted.size) & (g_sorted[pos] == store_global)
+
+    if require_full_cover and not np.all(ok):
+        missing = store_global[~ok]
+        raise RuntimeError(
+            f"[align] {missing.size} store EIDs not present in graph. "
+            f"First few: {missing[:10].tolist()}"
+        )
+
+    # keep only the ones that matched (normally all of them)
+    pos = pos[ok]
+    local = order[pos]  # map sorted-pos --> LOCAL edge ids (0..E-1)
+    return torch.from_numpy(local.astype(np.int64))
+
 
 # Call this once per split after you save edge_indices.npy
 def build_id_map(split_dir: str) -> None:
@@ -78,7 +82,12 @@ def build_id_map(split_dir: str) -> None:
 
 def _load_id_map(split_dir: str) -> Tuple[np.ndarray, np.ndarray]:
     z = np.load(os.path.join(split_dir, "eid_map.npz"))
-    return z["global_sorted"], z["rows_sorted"]
+    global_sorted, rows_sorted = z["global_sorted"], z["rows_sorted"]
+    # small consistency check: global_sorted must be sorted(edge_indices)
+    eids = np.load(os.path.join(split_dir, "edge_indices.npy"))
+    if global_sorted.shape != eids.shape or not np.array_equal(global_sorted, np.sort(eids, kind="mergesort")):
+        raise RuntimeError(f"[feature_store] eid_map.npz is stale or mismatched in {split_dir}.")
+    return global_sorted, rows_sorted
 
 def map_eids_to_rows(eids_global: np.ndarray, split_dir: str) -> np.ndarray:
     """
@@ -87,6 +96,7 @@ def map_eids_to_rows(eids_global: np.ndarray, split_dir: str) -> np.ndarray:
     Raises a clear error if any EID is missing (misalignment).
     """
     global_sorted, rows_sorted = _load_id_map(split_dir)
+    eids_global = np.asarray(eids_global, dtype=np.int64, order="C")
     idx = np.searchsorted(global_sorted, eids_global)
     # Guard: idx in-bounds and matches value
     in_bounds = (idx >= 0) & (idx < global_sorted.shape[0])
@@ -133,7 +143,6 @@ def build_feature_store(
       - numeric.dat           (float32 memmap [n, d_num])
       - categorical.npz       (CSR float32   [n, d_cat])
       - edge_indices.npy      (int64         [n])
-      - id_fastmap.npz        (ids_sorted, order)
       - y.npy                 (int64         [n])
       - ts.npy                (float32       [n])  optional; start time in seconds
 
@@ -194,7 +203,6 @@ def build_feature_store(
 
         # global edge ids (row positions from original df)
         np.save(os.path.join(split_dir, "edge_indices.npy"), idx.astype(np.int64, copy=False))
-        _save_id_fastmap(os.path.join(split_dir, "id_fastmap.npz"), idx.astype(np.int64, copy=False))
 
         return (Xnum.shape[0], Xnum.shape[1], Xcat.shape[1])
 
@@ -222,6 +230,10 @@ def _load_numeric_memmap(split_dir: str) -> np.memmap:
     # Infer shape: we persist shape by also having y.npy (n,) to get n_rows
     y = np.load(os.path.join(split_dir, "y.npy"))
     n = int(y.shape[0])
+    # cross-check with split EIDs length
+    eids = np.load(os.path.join(split_dir, "edge_indices.npy"))
+    if eids.shape[0] != n:
+        raise RuntimeError(f"[feature_store] n_rows mismatch in {split_dir}: y={n} vs edge_indices={eids.shape[0]}")
     # we also need d_num; infer via file size
     num_bytes = os.path.getsize(path)
     d = num_bytes // (4 * n)  # float32 bytes=4
@@ -230,12 +242,6 @@ def _load_numeric_memmap(split_dir: str) -> np.memmap:
 
 def _load_cat_csr(split_dir: str) -> sparse.csr_matrix:
     return _load_csr(os.path.join(split_dir, "categorical.npz"))
-
-
-def _load_fastmap(split_dir: str) -> Tuple[np.ndarray, np.ndarray]:
-    z = np.load(os.path.join(split_dir, "id_fastmap.npz"))
-    return z["ids_sorted"], z["order"]
-
 
 def fetch_edge_features(eids_global: np.ndarray, split_dir: str) -> np.ndarray:
     """

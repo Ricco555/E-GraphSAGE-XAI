@@ -9,7 +9,7 @@ import dgl
 from dgl.dataloading import NeighborSampler, as_edge_prediction_sampler
 from dgl.dataloading import DataLoader as DGLDataLoader  # avoid torch DataLoader clash
 
-from feature_store import fetch_edge_features
+from feature_store import fetch_edge_features, _map_global_to_local
 from debug_align import check_graph_vs_store
 
 # Try to import your model; if unavailable, use a fallback.
@@ -24,38 +24,6 @@ def _setup_logging(debug: bool):
     logging.basicConfig(level=lvl, format="%(asctime)s %(levelname)s %(message)s",
                         stream=sys.stdout, force=True)
     os.environ["PYTHONUNBUFFERED"] = "1"
-
-
-def _map_global_to_local(g: dgl.DGLGraph, split_dir: str, require_full_cover: bool = True) -> torch.Tensor:
-    """
-    Map the split's GLOBAL edge IDs (feature_store/<split>/edge_indices.npy) to this graph's
-    LOCAL edge IDs (0..E-1). Returns a torch.int64 tensor ordered exactly like the store file.
-
-    If require_full_cover=True, raise if any store EID is not present in the graph.
-    """
-    # 1) GLOBAL EIDs from the feature store (this split)
-    store_global = np.load(os.path.join(split_dir, "edge_indices.npy")).astype(np.int64)
-
-    # 2) GLOBAL EIDs carried by the graph (one per LOCAL edge id)
-    g_global = g.edata[dgl.EID].cpu().numpy().astype(np.int64)  # shape (E_local,)
-
-    # 3) Build a fast lookup: sort graph-global once, then search positions of store ids
-    order = np.argsort(g_global, kind="mergesort")
-    g_sorted = g_global[order]
-    pos = np.searchsorted(g_sorted, store_global)  # candidate positions in sorted array
-    ok = (pos < g_sorted.size) & (g_sorted[pos] == store_global)
-
-    if require_full_cover and not np.all(ok):
-        missing = store_global[~ok]
-        raise RuntimeError(
-            f"[align] {missing.size} store EIDs not present in graph. "
-            f"First few: {missing[:10].tolist()}"
-        )
-
-    # keep only the ones that matched (normally all of them)
-    pos = pos[ok]
-    local = order[pos]  # map sorted-pos --> LOCAL edge ids (0..E-1)
-    return torch.from_numpy(local.astype(np.int64))
 
 # ---------------- Fallback model (used only if you don't provide model.py) ----------------
 class _FallbackEdgeGraphSAGE(nn.Module):
@@ -132,6 +100,7 @@ def _print_block_shapes(blocks):
 # ---------------- One epoch (train or eval) ----------------
 def run_epoch(model, loader: DGLDataLoader, g: dgl.DGLGraph, split_dir: str, device,
               optim: torch.optim.Optimizer | None, criterion: nn.Module | None, debug: bool = False):
+    split_dir = getattr(loader, "split_dir", split_dir)  # prefer loader’s attached split_dir
     training = optim is not None
     model.train(training)
     total_loss, total_correct, total = 0.0, 0, 0
@@ -231,7 +200,8 @@ def run_training(args: argparse.Namespace | SimpleNamespace):
     # 1) Preflight: verify graph ↔ store consistency; get the store’s GLOBAL EIDs
     store_train_ids = check_graph_vs_store(g_train, fs_train, verbose=True)
     store_val_ids   = check_graph_vs_store(g_val,   fs_val,   verbose=True)
-
+    assert_graph_equals_store(g_train, fs_train, "train")
+    assert_graph_equals_store(g_val,   fs_val,   "val")
     # Infer edge feature dim if needed
     if args.edge_in == 0:
         sample_eid = g_train.edata[dgl.EID][:1].cpu().numpy()
@@ -316,6 +286,9 @@ def run_training(args: argparse.Namespace | SimpleNamespace):
 
     train_loader = train_loader_fn(eids_train_local)
     val_loader   = val_loader_fn(eids_val_local)
+    # attach split dirs to the loaders (so run_epoch can pick the correct store)
+    train_loader.split_dir = fs_train
+    val_loader.split_dir   = fs_val
     # Run the check right after creation:
     assert_loader_seed_alignment(g_train, eids_train_local, os.path.join(args.feature_store, "train"), name="train")
     assert_loader_seed_alignment(g_val,   eids_val_local,   os.path.join(args.feature_store, "val"),   name="val")
