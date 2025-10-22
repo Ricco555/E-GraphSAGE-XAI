@@ -188,10 +188,6 @@ def run_training(args: argparse.Namespace | SimpleNamespace):
     g_train = dgl.load_graphs(os.path.join(args.graphs_dir, "train.bin"))[0][0]
     g_val   = dgl.load_graphs(os.path.join(args.graphs_dir, "val.bin"))[0][0]
 
-    # Map store GLOBAL → graph LOCAL ids
-    eids_train_local = _map_global_to_local(g_train, fs_train)
-    eids_val_local   = _map_global_to_local(g_val,   fs_val)
-
     # If you drop invalid labels in VAL, filter *local* ids accordingly (example)
     if "y" in g_val.edata:
         keep_mask = (g_val.edata["y"] >= 0)              # per-local-edge boolean mask
@@ -284,6 +280,9 @@ def run_training(args: argparse.Namespace | SimpleNamespace):
     val_loader_fn   = make_edge_loader(g_val,   batch_size=args.batch_size, fanouts=fanouts,
                                        shuffle=False, num_workers=args.num_workers, seed=args.seed)
 
+    # Map store GLOBAL → graph LOCAL ids
+    eids_train_local = _map_global_to_local(g_train, fs_train)
+    eids_val_local   = _map_global_to_local(g_val,   fs_val)
     train_loader = train_loader_fn(eids_train_local)
     val_loader   = val_loader_fn(eids_val_local)
     # attach split dirs to the loaders (so run_epoch can pick the correct store)
