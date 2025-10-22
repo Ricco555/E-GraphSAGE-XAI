@@ -126,10 +126,14 @@ def run_epoch(model, loader: DGLDataLoader, g: dgl.DGLGraph, split_dir: str, dev
         store_eids = np.load(os.path.join(split_dir, "edge_indices.npy")).astype(np.int64)
         global_eids = g.edata[dgl.EID][torch.from_numpy(local_eids)].cpu().numpy().astype(np.int64)
         # (optional debug—prove mapping == store mapping exactly)
-        print(f"[dbg] local_eids[:8] = {local_eids[:8].tolist()}")
-        print(f"[dbg] global_eids[:8] = {global_eids[:8].tolist()}")
-        print(f"[dbg] store_eids@local[:8] = {store_eids[local_eids[:8]].tolist()}")
         if debug:
+            logging.info(f"[debug] local_eids[:8]={local_eids[:8].tolist()}")
+            logging.info(f"[debug] mapped global_eids[:8]={global_eids[:8].tolist()}")
+            logging.info(f"[debug] store_eids@local[:8]={store_eids[local_eids[:8]].tolist()}")
+            ok = np.isin(global_eids, store_eids)
+            logging.info(f"[debug] all mapped-in-store? {ok.all()} ({ok.sum()}/{ok.size})")
+            # This must be True because `global_eids` are literally a subset of `store_eids`.
+            assert ok.all(), "Mapping broken: mapped global ids must be in `store_eids`."
             store_eids = np.load(os.path.join(split_dir, "edge_indices.npy")).astype(np.int64)
             assert np.array_equal(global_eids, store_eids[local_eids]), "[debug] graph-based global_eids != store_eids[local_eids] (should never happen)"
         
@@ -199,7 +203,6 @@ def run_training(args: argparse.Namespace | SimpleNamespace):
     # If you drop invalid labels in VAL, filter *local* ids accordingly (example)
     if "y" in g_val.edata:
         keep_mask = (g_val.edata["y"] >= 0)              # per-local-edge boolean mask
-        eids_val_local = eids_val_local[keep_mask[eids_val_local].cpu().numpy()]
     
     # 1) Preflight: verify graph ↔ store consistency; get the store’s GLOBAL EIDs
     store_train_ids = check_graph_vs_store(g_train, fs_train, verbose=True)
@@ -314,13 +317,13 @@ def run_training(args: argparse.Namespace | SimpleNamespace):
     for ep in range(1, args.epochs + 1):
         tr_loss, tr_acc = run_epoch(model, train_loader, g_train, fs_train, device, optim, criterion, debug=getattr(args, "debug", False))
         va_loss, va_acc = run_epoch(model, val_loader,   g_val,   fs_val,   device, None, None, debug=False)
-        print(f"[epoch {ep:02d}] train loss {tr_loss:.4f} acc {tr_acc:.4f} | val loss {va_loss:.4f} acc {va_acc:.4f}")
+        logging.info(f"[epoch {ep:02d}] train loss {tr_loss:.4f} acc {tr_acc:.4f} | val loss {va_loss:.4f} acc {va_acc:.4f}")
         if va_acc > best_val:
             best_val = va_acc
             os.makedirs("artifacts", exist_ok=True)
             torch.save(model.state_dict(), "artifacts/best_edge_sage.pt")
 
-    print(f"Best val acc: {best_val:.4f}")
+    logging.info(f"Best val acc: {best_val:.4f}")
     return {"best_val_acc": float(best_val), "edge_in": edge_in, "fanouts": fanouts}
 
 # ---------------- Helper ----------------
@@ -342,8 +345,8 @@ def assert_loader_seed_alignment(g: dgl.DGLGraph, eids_local: torch.Tensor, spli
     missing = np.setdiff1d(loader_global, store_eids, assume_unique=False)
     extra   = np.setdiff1d(store_eids, loader_global, assume_unique=False)
 
-    print(f"[seed-check:{name}] seeds(local)={eids_local_np.size}  store={store_eids.size}")
-    print(f"[seed-check:{name}] missing_in_store={missing.size}  extra_in_store={extra.size}")
+    logging.debug(f"[seed-check:{name}] seeds(local)={eids_local_np.size}  store={store_eids.size}")
+    logging.debug(f"[seed-check:{name}] missing_in_store={missing.size}  extra_in_store={extra.size}")
 
     # Strong condition (best): the loader seeds are EXACTLY the store EIDs (same set).
     # If you expect to use ALL store edges for this split, enforce equality:
@@ -353,22 +356,22 @@ def assert_loader_seed_alignment(g: dgl.DGLGraph, eids_local: torch.Tensor, spli
 
     # Optional: prove we're not accidentally using positional IDs (0..E-1) as GLOBAL IDs
     if np.array_equal(loader_global, eids_local_np):
-        print(f"[seed-check:{name}] WARNING: loader 'GLOBAL' IDs equal local indices; "
-              "this would indicate you're not mapping local->global. Double-check.")
+        logging.debug(f"[seed-check:{name}] WARNING: loader 'GLOBAL' IDs equal local indices; "
+                      "this would indicate you're not mapping local->global. Double-check.")
 
 def assert_graph_equals_store(g, split_dir, split_name="train"):
     store = np.load(os.path.join(split_dir, "edge_indices.npy")).astype(np.int64)
     g_ids = g.edata[dgl.EID].cpu().numpy().astype(np.int64)
-    print(f"[preflight:{split_name}] graph_edges={g_ids.size}  store_rows={store.size}")
+    logging.debug(f"[preflight:{split_name}] graph_edges={g_ids.size}  store_rows={store.size}")
     # Strong check: equal arrays
     if store.shape != g_ids.shape:
         raise AssertionError(f"[{split_name}] size mismatch: graph {g_ids.size} vs store {store.size}")
     if not np.array_equal(store, g_ids):
         # show a small diff to debug order
-        print(" first graph EIDs   :", g_ids[:10].tolist())
-        print(" first store EIDs   :", store[:10].tolist())
+        logging.debug(" first graph EIDs   : %s", g_ids[:10].tolist())
+        logging.debug(" first store EIDs   : %s", store[:10].tolist())
         raise AssertionError(f"[{split_name}] order mismatch: graph EIDs != store edge_indices")
-    print(f"✅ [{split_name}] graph.edata[dgl.EID] is identical to {split_dir}/edge_indices.npy")
+    logging.debug(f"✅ [{split_name}] graph.edata[dgl.EID] is identical to {split_dir}/edge_indices.npy")
 
 
 # ---------------- CLI ----------------
