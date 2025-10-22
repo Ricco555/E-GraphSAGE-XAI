@@ -126,10 +126,12 @@ def run_epoch(model, loader: DGLDataLoader, g: dgl.DGLGraph, split_dir: str, dev
         store_eids = np.load(os.path.join(split_dir, "edge_indices.npy")).astype(np.int64)
         global_eids = g.edata[dgl.EID][torch.from_numpy(local_eids)].cpu().numpy().astype(np.int64)
         # (optional debug—prove mapping == store mapping exactly)
+        print(f"[dbg] local_eids[:8] =", local_eids[:8].tolist())
+        print(f"[dbg] global_eids[:8]=", global_eids[:8].tolist())
+        print(f"[dbg] store_eids@local[:8]=", store_eids[local_eids[:8]].tolist())
         if debug:
             store_eids = np.load(os.path.join(split_dir, "edge_indices.npy")).astype(np.int64)
-            assert np.array_equal(global_eids, store_eids[local_eids]), \
-                "[debug] graph-based global_eids != store_eids[local_eids] (should never happen)"
+            assert np.array_equal(global_eids, store_eids[local_eids]), "[debug] graph-based global_eids != store_eids[local_eids] (should never happen)"
         
         present = np.isin(global_eids, store_eids)
         if not present.all():
