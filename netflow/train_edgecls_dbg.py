@@ -348,11 +348,7 @@ def assert_loader_seed_alignment(g: dgl.DGLGraph, eids_local: torch.Tensor, spli
     logging.debug(f"[seed-check:{name}] seeds(local)={eids_local_np.size}  store={store_eids.size}")
     logging.debug(f"[seed-check:{name}] missing_in_store={missing.size}  extra_in_store={extra.size}")
 
-    # Strong condition (best): the loader seeds are EXACTLY the store EIDs (same set).
-    # If you expect to use ALL store edges for this split, enforce equality:
     assert missing.size == 0, f"[{name}] Some loader seeds (GLOBAL) are not in {split_dir}. First: {missing[:10].tolist()}"
-    # If you want equality (not just subset), also assert extra.size == 0.
-    # assert extra.size == 0, f"[{name}] Store has edges not covered by loader seeds. First: {extra[:10].tolist()}"
 
     # Optional: prove we're not accidentally using positional IDs (0..E-1) as GLOBAL IDs
     if np.array_equal(loader_global, eids_local_np):
