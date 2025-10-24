@@ -70,7 +70,45 @@ class _FallbackEdgeGraphSAGE(nn.Module):
         u, v = pair_graph.edges(form='uv')
         e_repr = torch.cat([h[u], h[v], e_feat], dim=1)
         return self.edge_mlp(e_repr)
+    
+    def encode(self, blocks: list[dgl.DGLBlock], x_nodes: torch.Tensor) -> torch.Tensor:
+        """
+        Compute node embeddings for the last block's destination nodes by running the same
+        per-block SAGE + norm + activation pipeline used in forward; returns the embeddings
+        for the destination nodes of the final block.
+        """
+        # Initialize node features (either provided or learned constant if no node feats)
+        if x_nodes is None:
+            # Expand learned constant node embedding to match the number of source nodes for the first block
+            h = self.node_embed.weight[0].expand(
+                blocks[0].num_src_nodes(), self.node_embed.embedding_dim
+            )
+        else:
+            h = x_nodes
 
+        last_h_dst = None
+        # Apply same conv -> norm -> relu sequence as in forward
+        for conv, bn, block in zip(self.sage, self.norms, blocks):
+            last_h_dst = h[:block.num_dst_nodes()]
+            h = conv(block, (h, last_h_dst))
+            h = bn(h)
+            h = torch.relu(h)
+
+        # return embeddings for destination nodes of the last block
+        return last_h_dst
+
+    def predict_from_embeddings(self, h_dst: torch.Tensor, pair_graph: dgl.DGLGraph, e_feat: torch.Tensor) -> torch.Tensor:
+        """
+        Compute logits for edges in pair_graph given precomputed dst-endpoint embeddings `h_dst`.
+        Assumes `pair_graph` node indexing aligns with rows of `h_dst` (i.e. edges refer to indices
+        within the block that produced `h_dst`).
+        """
+        with pair_graph.local_scope():
+            src, dst = pair_graph.edges(form='uv')
+            # gather endpoint embeddings and concatenate with edge features
+            he = torch.cat([h_dst[src], h_dst[dst]], dim=1)  # (B, 2*hidden)
+            x = torch.cat([he, e_feat], dim=1)               # (B, 2*hidden + edge_in)
+            return self.edge_mlp(x)
 
 # ---------------- DataLoader (edge mode) ----------------
 def make_edge_loader(g: dgl.DGLGraph, batch_size=2048, fanouts=(25, 15),
