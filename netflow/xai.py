@@ -140,7 +140,7 @@ def load_feature_names(feature_store_dir: str) -> Tuple[List[str], int, int]:
 @torch.no_grad()
 def compute_pair_embedding(model, blocks, x_nodes):
     """Return h_dst embeddings for the last block (D, hidden); uses your model.encode."""
-    return model.encode(blocks, x_nodes)  # if node_in=0 your encode handles constant features
+    return model.encode(blocks, x_nodes)  # if node_in=0 encode handles constant features
 
 def make_edge_head_fn(model, he_fixed: np.ndarray, device="cpu", return_prob=True, target_class=None):
     """
@@ -262,7 +262,7 @@ def aggregate_shap_per_class(model, g, loader, split_dir, feature_names, n_per_c
             )
             vals.append(np.abs(shap_vals[0]))
         if vals:
-            class2_meanabs[c] = np.mean(np.row_stack(vals), axis=0)
+            class2_meanabs[c] = np.mean(np.vstack(vals), axis=0)
     return class2_meanabs
 
 # Plot top-k features per class
@@ -294,7 +294,7 @@ def plot_spider(class2_meanabs, feature_names, id2label, k_union=8, save_path="a
         imp = class2_meanabs[c][chosen]
         imp_norm = (imp - imp.min()) / (imp.max() - imp.min() + 1e-12)
         data.append(imp_norm)
-    data = np.row_stack(data)
+    data = np.vstack(data)
 
     # 3) radar plot
     angles = np.linspace(0, 2*np.pi, len(chosen), endpoint=False).tolist()
@@ -324,7 +324,7 @@ def aggregate_signed_shap_per_class(model, g, loader, split_dir, feature_names, 
             )
             vals.append(shap_vals[0])
         if vals:
-            class2_signed[c] = np.mean(np.row_stack(vals), axis=0)
+            class2_signed[c] = np.mean(np.vstack(vals), axis=0)
     return class2_signed
 
 def plot_signed_topk(class2_signed, feature_names, id2label, k=10, save_dir="artifacts/xai"):
