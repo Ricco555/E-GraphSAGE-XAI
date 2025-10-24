@@ -1,46 +1,137 @@
-import os, numpy as np, torch, shap, matplotlib.pyplot as plt
+import os, joblib, json, numpy as np, torch, shap, matplotlib.pyplot as plt
+from typing import Tuple
 import dgl
+from traitlets import List
 from feature_store import fetch_edge_features
 
-def load_feature_names(feature_store_dir: str):
+def load_feature_names(feature_store_dir: str) -> Tuple[List[str], int, int]:
     """
-    Return: feature_names (list[str]), d_num (int), d_cat (int)
-    Assumes artifacts saved encoder + numeric column names.
+    Build edge feature names (numeric + one-hot categorical) for a given split.
+    Returns:
+        feature_names: list[str] of length (d_num + d_cat)
+        d_num:        int, numeric width in the split
+        d_cat:        int, categorical (one-hot) width in the split
+
+    This function is compatible with the artifacts written by:
+      - feature_numeric.py  -> artifacts/numeric/numeric_artifacts.joblib (num_cols_final)  [numeric]  (float32)
+      - categorical_encoding.py -> artifacts/categorical/categorical_artifacts.json (feature_names/encoder_path)  [CSR]
+      - feature_store.py    -> {split}/numeric.dat, {split}/y.npy, {split}/categorical.npz (optional)
     """
-    # adjust artifact path to where you saved them
-    import joblib
-    candidates = [
-        os.path.join("artifacts", "scalers", "artifacts.pkl"),
-        os.path.join(feature_store_dir, "artifacts.pkl"),
-        os.path.join(feature_store_dir, "..", "artifacts.pkl"),
-        os.path.join(feature_store_dir, "scalers", "artifacts.pkl"),
+    split_dir = os.path.abspath(feature_store_dir)
+    fs_root = os.path.abspath(os.path.join(split_dir, os.pardir))  # e.g., .../feature_store
+
+    # --- 1) Determine true shapes from the split (source of truth) ---
+    # numeric: infer d_num from file size and #rows from y.npy (float32 -> 4 bytes)
+    y_path = os.path.join(split_dir, "y.npy")
+    num_path = os.path.join(split_dir, "numeric.dat")
+    if not (os.path.exists(y_path) and os.path.exists(num_path)):
+        raise FileNotFoundError(f"[feature_store] Missing {y_path} or {num_path}")
+
+    n_rows = int(np.load(y_path).shape[0])
+    num_bytes = os.path.getsize(num_path)
+    if n_rows <= 0 or num_bytes % 4 != 0:
+        raise RuntimeError(f"[feature_store] numeric.dat size or y.npy rows invalid in {split_dir}")
+    d_num = int(num_bytes // (4 * n_rows))  # float32
+
+    # categorical: read shape from CSR if present; else 0
+    cat_path = os.path.join(split_dir, "categorical.npz")
+    if os.path.exists(cat_path):
+        import scipy.sparse as sp  # optional dep already used in your pipeline
+        Xcat = sp.load_npz(cat_path)
+        if Xcat.shape[0] != n_rows:
+            raise RuntimeError(f"[feature_store] categorical rows={Xcat.shape[0]} != y rows={n_rows} in {split_dir}")
+        d_cat = int(Xcat.shape[1])
+    else:
+        d_cat = 0
+
+    # --- 2) Try to load metadata artifacts for real column names ---
+
+    # Numeric artifacts (preferred): artifacts/numeric/numeric_artifacts.joblib
+    num_names = None
+    num_art_candidates = [
+        os.path.join(fs_root, "artifacts", "numeric", "numeric_artifacts.joblib"),
+        os.path.join("artifacts", "numeric", "numeric_artifacts.joblib"),  # relative fallback
     ]
-    arts_p = None
-    for p in candidates:
+    for p in num_art_candidates:
         if os.path.exists(p):
-            arts_p = p
-            break
-    if arts_p is None:
-        raise FileNotFoundError(f"artifacts.pkl not found; tried the following paths: {candidates}")
-    arts = joblib.load(arts_p)
+            try:
+                arts = joblib.load(p)  # dict produced by feature_numeric.fit_numeric_transform
+                # Prefer "num_cols_final" (after var/corr masks); fall back to "num_cols"
+                for k in ("num_cols_final", "numeric_cols_final", "num_cols", "numeric_cols"):
+                    if isinstance(arts.get(k), (list, tuple)):
+                        if len(arts[k]) == d_num:
+                            num_names = list(arts[k])
+                        # length mismatch -> ignore and fallback
+                        break
+            except Exception:
+                pass
+            if num_names is not None:
+                break
 
-    num_cols = arts.get("num_cols") or arts.get("numeric_cols")  # numeric column names
-    d_num = len(num_cols)
+    # If not available or mismatched, fallback to generic
+    if num_names is None:
+        num_names = [f"num_{i}" for i in range(d_num)]
 
-    enc = arts.get("encoder")
-    cat_cols = arts.get("cat_cols") or []
+    # Categorical artifacts (preferred): artifacts/categorical/categorical_artifacts.json
     cat_names = []
-    if enc is not None and len(cat_cols) > 0:
-        # OneHotEncoder.categories_ is a list of arrays in the same order as cat_cols
-        idx = 0
-        for col, cats in zip(cat_cols, enc.categories_):
-            # each category produces a column
-            for c in cats:
-                cat_names.append(f"{col}={c}")
-            idx += 1
-    d_cat = len(cat_names)
+    if d_cat > 0:
+        cat_art_candidates = [
+            os.path.join(fs_root, "artifacts", "categorical", "categorical_artifacts.json"),
+            os.path.join("artifacts", "categorical", "categorical_artifacts.json"),  # relative fallback
+        ]
+        cat_meta = None
+        for p in cat_art_candidates:
+            if os.path.exists(p):
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        cat_meta = json.load(f)
+                    break
+                except Exception:
+                    cat_meta = None
 
-    feature_names = list(num_cols) + cat_names
+        if cat_meta is not None:
+            # (A) Use precomputed feature_names when they match d_cat
+            fnh = cat_meta.get("feature_names", None)
+            if isinstance(fnh, list) and len(fnh) == d_cat:
+                cat_names = list(fnh)
+            else:
+                # (B) Rebuild names from saved encoder if present and compatible
+                enc_path = cat_meta.get("encoder_path", "")
+                if enc_path and not os.path.isabs(enc_path):
+                    enc_path = os.path.join(fs_root, "artifacts", "categorical", enc_path)
+                try:
+                    enc = joblib.load(enc_path) if enc_path and os.path.exists(enc_path) else None
+                except Exception:
+                    enc = None
+                if enc is not None and hasattr(enc, "categories_"):
+                    # categories_ is list of arrays in the same order as cat_cols
+                    cat_cols = cat_meta.get("cat_cols", [])
+                    cat_names_tmp = []
+                    try:
+                        for col, cats in zip(cat_cols, enc.categories_):
+                            for c in list(cats):
+                                cat_names_tmp.append(f"{col}={c}")
+                        if len(cat_names_tmp) == d_cat:
+                            cat_names = cat_names_tmp
+                    except Exception:
+                        cat_names = []
+
+        # Fallback: generic names if still empty or mismatched
+        if not cat_names or len(cat_names) != d_cat:
+            cat_names = [f"cat_{i}" for i in range(d_cat)]
+
+    # --- 3) Finalize ---
+    feature_names = num_names + cat_names
+    # Guard against any drift: correct the length to exact (d_num + d_cat)
+    total_dim = d_num + d_cat
+    if len(feature_names) != total_dim:
+        # Heuristic: trim or pad the tail with generic names to match the true width
+        if len(feature_names) > total_dim:
+            feature_names = feature_names[:total_dim]
+        else:
+            pad = [f"feat_{i}" for i in range(total_dim - len(feature_names))]
+            feature_names = feature_names + pad
+
     return feature_names, d_num, d_cat
 
 # Local SHAP for a single edge (feature-level)
