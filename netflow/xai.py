@@ -144,28 +144,34 @@ def compute_pair_embedding(model, blocks, x_nodes):
 
 def make_edge_head_fn(model, he_fixed: np.ndarray, device="cpu", return_prob=True, target_class=None):
     """
-    Wrap the edge-head to accept X_edge (B, edge_in) and output score/probability for target_class (B,).
-    he_fixed: (2*hidden,) concatenated [h_src,h_dst] for the specific edge.
+    Wrap the edge-head to accept X_edge (B, edge_in) and return:
+      - if target_class is None:
+          (B, C) probabilities (or logits if return_prob=False)
+      - else:
+          (B,) probabilities (or logits) for the target class
+    NOTE: returns *NumPy* arrays, with no grad graph attached.
     """
-    he_fixed_t = torch.from_numpy(he_fixed[None, :]).to(device)
-    he_fixed_t.requires_grad_(False)  # <---- safety
+    he_fixed_t = torch.from_numpy(he_fixed[None, :].astype(np.float32, copy=False)).to(device)
+    he_fixed_t.requires_grad_(False)
 
     def f_edge(X: np.ndarray):
-        X_t = torch.from_numpy(X.astype(np.float32, copy=False)).to(device)
+        # SHAP will pass a numpy array; ensure float32
+        X = np.asarray(X, dtype=np.float32)
+        X_t = torch.from_numpy(X).to(device)
+        # Build fixed [h_src||h_dst] per row
         he = he_fixed_t.expand(X_t.size(0), -1)
-        # IMPORTANT: run without grad and detach before converting to numpy
         with torch.no_grad():
-            logits = model.edge_mlp(torch.cat([he, X_t], dim=1))   # (B, C)
+            logits = model.edge_mlp(torch.cat([he, X_t], dim=1))  # (B, C)
             if target_class is None:
                 if return_prob:
                     probs = torch.softmax(logits, dim=1).detach().cpu().numpy()
                     return probs  # (B, C)
-                return logits.detach().cpu().numpy()
-            # single-class vector output
+                return logits.detach().cpu().numpy()              # (B, C)
+            # Single-class output
             if return_prob:
                 probs = torch.softmax(logits, dim=1)[:, target_class].detach().cpu().numpy()
                 return probs  # (B,)
-            return logits[:, target_class].detach().cpu().numpy()
+            return logits[:, target_class].detach().cpu().numpy()  # (B,)
     return f_edge
 
 def local_shap_for_edge(model, g, loader, edge_idx_local: int, split_dir: str,
@@ -179,6 +185,8 @@ def local_shap_for_edge(model, g, loader, edge_idx_local: int, split_dir: str,
 
     Returns: shap_values (1, edge_in), feature_names list, base_value
     """
+    model.eval()
+    torch.set_grad_enabled(False)
     # 1) Grab one mini-batch that includes this edge
     # Simple way: iterate loader until this local eid appears
     he_fixed = None
@@ -201,7 +209,7 @@ def local_shap_for_edge(model, g, loader, edge_idx_local: int, split_dir: str,
 
             # 3) Edge features for this edge (GLOBAL EID)
             global_eids = g.edata[dgl.EID][torch.from_numpy(local_eids)].cpu().numpy().astype(np.int64)
-            e_feat_np = fetch_edge_features(global_eids[pos:pos+1], split_dir)  # (1, edge_in)
+            e_feat_np = fetch_edge_features(global_eids[pos:pos+1], split_dir).astype(np.float32, copy=False)
             x_edge_row = e_feat_np[0]
             # Label
             y_true = int(g.edata["y"][edge_idx_local].item())
@@ -214,7 +222,7 @@ def local_shap_for_edge(model, g, loader, edge_idx_local: int, split_dir: str,
     store_eids = loader.store_eids if hasattr(loader, "store_eids") else \
                  np.load(os.path.join(split_dir, "edge_indices.npy")).astype(np.int64)
     bg_ids = store_eids[np.random.default_rng(0).choice(store_eids.size, size=min(background_size, store_eids.size), replace=False)]
-    bg_X = fetch_edge_features(bg_ids, split_dir)  # (B_bg, edge_in)
+    bg_X = fetch_edge_features(bg_ids, split_dir).astype(np.float32, copy=False)   # (B_bg, edge_in)
 
     # 4) Wrap the edge-head for SHAP
     f = make_edge_head_fn(model, he_fixed, device=device, return_prob=True, target_class=target_class)
