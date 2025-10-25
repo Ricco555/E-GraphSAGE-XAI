@@ -229,15 +229,53 @@ def local_shap_for_edge(model, g, loader, edge_idx_local: int, split_dir: str,
     explainer = shap.KernelExplainer(f, bg_X)
     sv = explainer.shap_values(x_edge_row[None, :], nsamples='auto')  # returns array(s)
 
-    # If multi-output, pick target_class
-    if isinstance(sv, list):
+    # Helper to unify sv_raw -> (1, d) array
+    def _select_sv(sv_raw, target_class, f, x_edge_row):
+        # If wrapper returns single-output (target_class is not None),
+        # KernelExplainer usually returns np.ndarray of shape (1, d)
+        if isinstance(sv_raw, np.ndarray):
+            return sv_raw  # (1, d)
+        # Otherwise it's a list:
+        if not isinstance(sv_raw, list) or len(sv_raw) == 0:
+            raise RuntimeError("Unexpected SHAP return type.")
         if target_class is None:
-            target_class = int(np.argmax(f(x_edge_row[None,:])[0]))
-        shap_vals = sv[target_class]  # (1, edge_in)
-        base_value = explainer.expected_value[target_class]
-    else:
-        shap_vals = sv  # (1, edge_in)
-        base_value = explainer.expected_value
+            # choose predicted class
+            probs = f(x_edge_row[None, :])  # (1, C)
+            # probs may be (1, C) or (1,) if wrapper returns logits; enforce 2D
+            if isinstance(probs, np.ndarray) and probs.ndim == 2 and probs.shape[1] > 1:
+                pred_c = int(np.argmax(probs[0]))
+            else:
+                # If not multi-output, there is only one class to explain
+                pred_c = 0
+            pred_c = min(pred_c, len(sv_raw) - 1)
+            return sv_raw[pred_c]  # (1, d)
+        # target_class is set: pick it if available, else fallback to the only element
+        if target_class < len(sv_raw):
+            return sv_raw[target_class]  # (1, d)
+        else:
+            # single-output list-of-one fallback
+            return sv_raw[0]
+
+    # Pick the correct 2D array
+    shap_vals = _select_sv(sv_raw, target_class, f, x_edge_row)  # (1, d)
+    base_value = explainer.expected_value
+    # expected_value can be a scalar or list; normalize it to a scalar
+    if isinstance(base_value, (list, tuple, np.ndarray)):
+        # select consistent base for the chosen output
+        if target_class is None:
+            if isinstance(sv_raw, list) and len(base_value) == len(sv_raw):
+                # predicted class base value
+                probs = f(x_edge_row[None, :])
+                if isinstance(probs, np.ndarray) and probs.ndim == 2 and probs.shape[1] > 1:
+                    pred_c = int(np.argmax(probs[0]))
+                else:
+                    pred_c = 0
+                base_value = base_value[min(pred_c, len(base_value)-1)]
+            else:
+                base_value = base_value[0]
+        else:
+            idx = target_class if isinstance(sv_raw, list) and target_class < len(base_value) else 0
+            base_value = base_value[idx]
 
     return shap_vals, x_edge_row, y_true, base_value
 
