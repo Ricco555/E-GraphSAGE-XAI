@@ -147,24 +147,25 @@ def make_edge_head_fn(model, he_fixed: np.ndarray, device="cpu", return_prob=Tru
     Wrap the edge-head to accept X_edge (B, edge_in) and output score/probability for target_class (B,).
     he_fixed: (2*hidden,) concatenated [h_src,h_dst] for the specific edge.
     """
-    he_fixed_t = torch.from_numpy(he_fixed[None, :]).to(device)  # (1, 2*hidden)
+    he_fixed_t = torch.from_numpy(he_fixed[None, :]).to(device)
+    he_fixed_t.requires_grad_(False)  # <---- safety
 
     def f_edge(X: np.ndarray):
         X_t = torch.from_numpy(X.astype(np.float32, copy=False)).to(device)
         he = he_fixed_t.expand(X_t.size(0), -1)
-        logits = model.edge_mlp(torch.cat([he, X_t], dim=1))  # (B, C)
-        if target_class is None:
-            # return max-logit or probabilities for SHAP multi-output
+        # IMPORTANT: run without grad and detach before converting to numpy
+        with torch.no_grad():
+            logits = model.edge_mlp(torch.cat([he, X_t], dim=1))   # (B, C)
+            if target_class is None:
+                if return_prob:
+                    probs = torch.softmax(logits, dim=1).detach().cpu().numpy()
+                    return probs  # (B, C)
+                return logits.detach().cpu().numpy()
+            # single-class vector output
             if return_prob:
-                probs = torch.softmax(logits, dim=1).cpu().numpy()
-                return probs  # (B,C)
-            return logits.detach().cpu().numpy()
-        # single-class output
-        if return_prob:
-            probs = torch.softmax(logits, dim=1)[:, target_class]
-            return probs.detach().cpu().numpy()
-        return logits[:, target_class].detach().cpu().numpy()
-
+                probs = torch.softmax(logits, dim=1)[:, target_class].detach().cpu().numpy()
+                return probs  # (B,)
+            return logits[:, target_class].detach().cpu().numpy()
     return f_edge
 
 def local_shap_for_edge(model, g, loader, edge_idx_local: int, split_dir: str,
