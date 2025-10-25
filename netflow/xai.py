@@ -229,14 +229,14 @@ def local_shap_for_edge(model, g, loader, edge_idx_local: int, split_dir: str,
     explainer = shap.KernelExplainer(f, bg_X)
     sv = explainer.shap_values(x_edge_row[None, :], nsamples='auto')  # returns array(s)
 
-    # Helper to unify sv_raw -> (1, d) array
-    def _select_sv(sv_raw, target_class, f, x_edge_row):
+    # Helper to unify sv -> (1, d) array
+    def _select_sv(sv, target_class, f, x_edge_row):
         # If wrapper returns single-output (target_class is not None),
         # KernelExplainer usually returns np.ndarray of shape (1, d)
-        if isinstance(sv_raw, np.ndarray):
-            return sv_raw  # (1, d)
+        if isinstance(sv, np.ndarray):
+            return sv  # (1, d)
         # Otherwise it's a list:
-        if not isinstance(sv_raw, list) or len(sv_raw) == 0:
+        if not isinstance(sv, list) or len(sv) == 0:
             raise RuntimeError("Unexpected SHAP return type.")
         if target_class is None:
             # choose predicted class
@@ -247,23 +247,23 @@ def local_shap_for_edge(model, g, loader, edge_idx_local: int, split_dir: str,
             else:
                 # If not multi-output, there is only one class to explain
                 pred_c = 0
-            pred_c = min(pred_c, len(sv_raw) - 1)
-            return sv_raw[pred_c]  # (1, d)
+            pred_c = min(pred_c, len(sv) - 1)
+            return sv[pred_c]  # (1, d)
         # target_class is set: pick it if available, else fallback to the only element
-        if target_class < len(sv_raw):
-            return sv_raw[target_class]  # (1, d)
+        if target_class < len(sv):
+            return sv[target_class]  # (1, d)
         else:
             # single-output list-of-one fallback
-            return sv_raw[0]
+            return sv[0]
 
     # Pick the correct 2D array
-    shap_vals = _select_sv(sv_raw, target_class, f, x_edge_row)  # (1, d)
+    shap_vals = _select_sv(sv, target_class, f, x_edge_row)  # (1, d)
     base_value = explainer.expected_value
     # expected_value can be a scalar or list; normalize it to a scalar
     if isinstance(base_value, (list, tuple, np.ndarray)):
         # select consistent base for the chosen output
         if target_class is None:
-            if isinstance(sv_raw, list) and len(base_value) == len(sv_raw):
+            if isinstance(sv, list) and len(base_value) == len(sv):
                 # predicted class base value
                 probs = f(x_edge_row[None, :])
                 if isinstance(probs, np.ndarray) and probs.ndim == 2 and probs.shape[1] > 1:
@@ -274,7 +274,7 @@ def local_shap_for_edge(model, g, loader, edge_idx_local: int, split_dir: str,
             else:
                 base_value = base_value[0]
         else:
-            idx = target_class if isinstance(sv_raw, list) and target_class < len(base_value) else 0
+            idx = target_class if isinstance(sv, list) and target_class < len(base_value) else 0
             base_value = base_value[idx]
 
     return shap_vals, x_edge_row, y_true, base_value
