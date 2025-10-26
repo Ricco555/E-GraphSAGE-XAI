@@ -138,9 +138,61 @@ def load_feature_names(feature_store_dir: str) -> Tuple[List[str], int, int]:
 # We freeze graph context (the pair embedding [h_src,h_dst]) 
 # and explain only the effect of the edge feature vector on the logit/probability for a chosen class.
 @torch.no_grad()
-def compute_pair_embedding(model, blocks, x_nodes):
-    """Return h_dst embeddings for the last block (D, hidden); uses your model.encode."""
-    return model.encode(blocks, x_nodes)  # if node_in=0 encode handles constant features
+def compute_pair_embedding(model, blocks, x_nodes, return_src: bool = False):
+    """
+    Backwards-compatible wrapper around model.encode.
+    - Default (return_src=False): returns whatever model.encode(...) returned (expected: h_dst tensor).
+    - If return_src=True: attempts to return (h_src, h_dst).
+        * If model.encode already returns a pair/tuple of two tensors, they are validated and ordered
+          to match (num_src_nodes_in_block0, num_dst_nodes_in_last_block).
+        * If model.encode returns a single tensor (legacy), a RuntimeError is raised with a short
+          instruction to update model.encode to provide src embeddings too.
+
+    This preserves the original behavior for callers that expect a single h_dst tensor.
+    """
+    # call model.encode (keep existing behaviour)
+    res = model.encode(blocks, x_nodes)
+
+    if not return_src:
+        return res
+
+    # want (h_src, h_dst)
+    # If encode already returned a pair, try to interpret it
+    if isinstance(res, (list, tuple)) and len(res) == 2:
+        a, b = res[0], res[1]
+        # determine expected sizes from blocks
+        try:
+            num_src = int(blocks[0].srcdata[dgl.NID].shape[0])
+            num_dst = int(blocks[-1].dstdata[dgl.NID].shape[0])
+        except Exception:
+            # fallback if shapes can't be read — assume ordering (a -> h_src, b -> h_dst)
+            return (a, b)
+        # match by first-dimension
+        if getattr(a, "size", None) and getattr(b, "size", None):
+            a0 = int(a.size(0))
+            b0 = int(b.size(0))
+            if a0 == num_src and b0 == num_dst:
+                return (a, b)
+            if a0 == num_dst and b0 == num_src:
+                return (b, a)
+            # shapes don't match expected counts -> still return (a,b) but warn via RuntimeError for clarity
+            raise RuntimeError(
+                f"model.encode returned two tensors but their sizes don't match block src/dst counts "
+                f"(got {a0},{b0} expected {num_src},{num_dst}). Inspect model.encode output."
+            )
+
+    # If encode returned a single tensor, treat as legacy h_dst and fail fast when src requested
+    if not isinstance(res, (list, tuple)):
+        raise RuntimeError(
+            "compute_pair_embedding: model.encode currently returns a single tensor (h_dst). "
+            "To enable structural XAI (neighbor masking) please update model.encode to return "
+            "(h_src, h_dst) when called with return_src=True, or call compute_pair_embedding with "
+            "return_src=False and provide h_src by other means."
+        )
+
+    # any other unexpected return type
+    raise RuntimeError("compute_pair_embedding: unexpected return from model.encode")
+
 
 def make_edge_head_fn(model, he_fixed: np.ndarray, device="cpu", return_prob=True, target_class=None):
     """
@@ -398,49 +450,59 @@ def plot_signed_topk(class2_signed, feature_names, id2label, k=10, save_dir="art
 # For each neighbor n, rebuild a modified block where you remove edges from n→{u or v} (or zero out h_n in h_dst for a quick approximation), then recompute the logit delta for c.
 # Rank neighbors by |delta|; group by attributes (e.g., protocol or subnet) for analyst-friendly views.
 # “perturbation/ablation” estimate of structural contribution
-def neighbor_impact_approx(model, h_dst, src_pos, dst_pos, e_feat_row, neighbors_pos, device="cpu", target_class=None):
+def neighbor_impact_approx(model, h_dst, src_pos, dst_pos, e_feat_row, neighbors_pos, device="cpu", target_class=None, h_src=None):
     """
-    h_dst: (N_dst, hidden) embeddings for dst nodes in last block
-    src_pos, dst_pos: scalar indices (int or 0-d tensor) inside h_dst for the chosen edge endpoints
-    neighbors_pos: list[int] positions in h_dst to "mask"
+    h_dst: (num_dst, hidden) embeddings for dst nodes (as before)
+    h_src: optional (num_src, hidden) embeddings for block src nodes (if available)
+    neighbors_pos: list[int] positions in block.src (or block.dst) to "mask"
+    If a neighbor index is valid in h_src it will be masked there; otherwise in h_dst.
     Returns: dict {neighbor_idx_in_block -> delta_prob[target_class]}
     """
     import torch
     impacts = {}
     model.eval()
     with torch.no_grad():
-        # ensure scalar indices
-        if isinstance(src_pos, torch.Tensor):
-            s_idx = int(src_pos.item())
-        else:
-            s_idx = int(src_pos)
-        if isinstance(dst_pos, torch.Tensor):
-            d_idx = int(dst_pos.item())
-        else:
-            d_idx = int(dst_pos)
+        # scalar indices
+        s_idx = int(src_pos.item()) if isinstance(src_pos, torch.Tensor) else int(src_pos)
+        d_idx = int(dst_pos.item()) if isinstance(dst_pos, torch.Tensor) else int(dst_pos)
 
-        # extract row vectors and make batch dim (1, hidden)
+        # source/dest vectors for the explained edge (use h_dst as before)
         src_vec = h_dst[s_idx].to(device).unsqueeze(0)   # (1, hidden)
         dst_vec = h_dst[d_idx].to(device).unsqueeze(0)   # (1, hidden)
         e_vec   = e_feat_row.to(device).unsqueeze(0).float()  # (1, feat_dim)
 
-        inp = torch.cat([src_vec, dst_vec, e_vec], dim=1)  # (1, 2*hidden + feat_dim)
-        base_logits = model.edge_mlp(inp)                  # (1, num_classes)
-        # determine target class if not provided
+        inp = torch.cat([src_vec, dst_vec, e_vec], dim=1)
+        base_logits = model.edge_mlp(inp)
         if target_class is None:
             target_class = int(torch.argmax(base_logits, dim=1)[0].item())
         base_prob = torch.softmax(base_logits, dim=1)[0, target_class].item()
 
+        # lengths for safe indexing
+        dst_len = int(h_dst.size(0))
+        src_len = int(h_src.size(0)) if h_src is not None else 0
+
         for n in neighbors_pos:
-            # clone and mask single neighbor
-            h_mod = h_dst.clone().to(device)
-            h_mod[int(n)] = 0.0
-            src_vec_m = h_mod[s_idx].unsqueeze(0)
-            dst_vec_m = h_mod[d_idx].unsqueeze(0)
+            ni = int(n)
+            # clone copies
+            h_dst_mod = h_dst.clone().to(device)
+            h_src_mod = h_src.clone().to(device) if h_src is not None else None
+
+            # decide where to mask: prefer h_src if valid there (neighbors_pos are typically src positions)
+            if h_src_mod is not None and 0 <= ni < src_len:
+                h_src_mod[ni] = 0.0
+            elif 0 <= ni < dst_len:
+                h_dst_mod[ni] = 0.0
+            else:
+                # out-of-range: skip this neighbor
+                continue
+
+            # Build edge vectors: use h_dst_mod for endpoint vectors (keeps previous behaviour)
+            src_vec_m = h_dst_mod[s_idx].unsqueeze(0)
+            dst_vec_m = h_dst_mod[d_idx].unsqueeze(0)
             inp_m = torch.cat([src_vec_m, dst_vec_m, e_vec], dim=1)
             logits = model.edge_mlp(inp_m)
             prob = torch.softmax(logits, dim=1)[0, target_class].item()
-            impacts[int(n)] = base_prob - prob  # positive => neighbor increased prob for class
+            impacts[ni] = base_prob - prob
     return impacts
 
 # Helper to get neighbor positions from a batch
@@ -475,69 +537,65 @@ def get_neighbor_positions_from_batch(blocks, pair_graph, local_eids, edge_idx_l
     neighbors_global_nids = [int(src_global[p]) for p in neigh_src_positions]
     return src_pos, dst_pos, neigh_src_positions, neighbors_global_nids
 
-def visualize_neighbor_impacts(model, loader, g, edge_idx_local, split_dir, topk=10, device="cpu", target_class=0):
-    """
-    High-level helper: find a loader batch containing edge_idx_local, compute h_dst,
-    get neighbor positions and run neighbor_impact_approx. Plot topk neighbors by abs(delta).
-    """
+def visualize_neighbor_impacts(model, loader, g, edge_gid, split_dir, topk=10, device="cpu", target_class=0):
+    import torch, numpy as np, matplotlib.pyplot as plt
+    from feature_store import fetch_edge_features
     model.eval()
     torch.set_grad_enabled(False)
 
-    he_fixed = None
     for input_nodes, pair_graph, blocks in loader:
         local_eids = pair_graph.edata[dgl.EID].cpu().numpy().astype(np.int64)
-        if edge_idx_local in local_eids:
-            # move blocks/pair_graph to device
-            blocks = [b.to(device) for b in blocks] if blocks else blocks
-            pair_graph = pair_graph.to(device)
-            # compute embeddings
-            h_dst = compute_pair_embedding(model, blocks, x_nodes=None)  # (D, hidden)
-            # compute positions and neighbor list
-            src_pos, dst_pos, neighbors_pos, neighbors_global_nids = get_neighbor_positions_from_batch(blocks, pair_graph, local_eids, edge_idx_local)
+        if int(edge_gid) not in local_eids:
+            continue
+        pair_graph = pair_graph.to(device)
+        blocks = [b.to(device) for b in blocks]
 
-            # --- PRAGMATIC FIX: filter neighbors that are valid indices into h_dst ---
-            h_dst_len = int(h_dst.size(0))
-            paired = list(zip([int(p) for p in neighbors_pos], [int(g) for g in neighbors_global_nids]))
-            valid = [(p, g) for p, g in paired if 0 <= p < h_dst_len]
-            if len(valid) < len(paired):
-                print(f"warning: filtered {len(paired)-len(valid)} neighbor(s) out-of-range for h_dst (len={h_dst_len})")
-            if len(valid) == 0:
-                raise RuntimeError("no valid neighbor positions remain after filtering; consider computing src embeddings or remapping indices")
-            neighbors_pos = [p for p, _ in valid]
-            neighbors_global_nids = [g for _, g in valid]
-            # --- end fix ---
+        # request both src and dst embeddings (backwards compatible: compute_pair_embedding still returns h_dst when called elsewhere)
+        try:
+            h_src, h_dst = compute_pair_embedding(model, blocks, x_nodes=None, return_src=True)
+        except ValueError:
+            # if compute_pair_embedding cannot return src/dst, fall back to old behavior and raise clear error
+            raise RuntimeError("compute_pair_embedding must be updated to support return_src=True (see xai.py instructions)")
 
-            # ensure tensors/inputs on device
-            h_dst = h_dst.to(device)
-            e_feat_np = fetch_edge_features(np.array([g.edata[dgl.EID][torch.from_numpy(local_eids)][np.where(local_eids==edge_idx_local)[0][0]]]), split_dir)
-            e_feat = torch.from_numpy(e_feat_np[0]).to(device).float()
-            # run neighbor impact approx
-            impacts = neighbor_impact_approx(model, h_dst, torch.tensor(src_pos, dtype=torch.long, device=device),
-                                            torch.tensor(dst_pos, dtype=torch.long, device=device),
-                                            e_feat, neighbors_pos, device=device, target_class=target_class)
-            # build DataFrame-like sorted list
-            items = sorted(impacts.items(), key=lambda x: abs(x[1]), reverse=True)
-            items = items[:topk]
-            labels = []
-            vals = []
-            for pos_idx, delta in items:
-                # map pos_idx -> global nid (guard)
+        src_pos, dst_pos, neighbors_pos, neighbors_global_nids = get_neighbor_positions_from_batch(blocks, pair_graph, local_eids, int(edge_gid))
+
+        # fetch edge features
+        e_feat_np = fetch_edge_features(np.array([int(edge_gid)], dtype=np.int64), split_dir)
+        e_feat = torch.from_numpy(e_feat_np[0]).to(device).float()
+
+        # pass both embeddings to neighbor impact (now handles src/dst masking)
+        impacts = neighbor_impact_approx(model, h_dst.to(device),
+                                         torch.tensor(src_pos, dtype=torch.long, device=device),
+                                         torch.tensor(dst_pos, dtype=torch.long, device=device),
+                                         e_feat, neighbors_pos, device=device, target_class=target_class, h_src=h_src.to(device))
+
+        if len(impacts) == 0:
+            raise RuntimeError("no neighbor impacts computed (empty/invalid neighbors_pos)")
+
+        items = sorted(impacts.items(), key=lambda x: abs(x[1]), reverse=True)[:topk]
+        labels = []
+        vals = []
+        for pos_idx, delta in items:
+            try:
+                gid = neighbors_global_nids[neighbors_pos.index(pos_idx)]
+            except Exception:
                 try:
-                    gid = neighbors_global_nids[neighbors_pos.index(pos_idx)]
+                    gid = int(blocks[0].srcdata[dgl.NID][pos_idx].item())
                 except Exception:
-                    gid = int(blocks[0].srcdata[dgl.NID][pos_idx].item()) if 'srcdata' in blocks[0].__dict__ else int(pos_idx)
-                labels.append(f"nid={gid}")
-                vals.append(delta)
-            # plot
-            import matplotlib.pyplot as plt
-            fig, ax = plt.subplots(figsize=(8, max(3, 0.35*len(labels))))
-            y_pos = range(len(labels))
-            ax.barh(y_pos, vals[::-1], color="C1")
-            ax.set_yticks(y_pos)
-            ax.set_yticklabels(labels[::-1])
-            ax.set_xlabel("delta prob (base - masked)")
-            ax.set_title(f"Top-{len(labels)} neighbor impacts for local edge {edge_idx_local} (class={target_class})")
-            plt.tight_layout()
-            plt.show()
-            return impacts, labels, vals
-    raise RuntimeError(f"local edge {edge_idx_local} not found in loader batches")
+                    gid = int(pos_idx)
+            labels.append(f"nid={gid}")
+            vals.append(delta)
+
+        fig, ax = plt.subplots(figsize=(8, max(3, 0.35*len(labels))))
+        y_pos = range(len(labels))
+        ax.barh(y_pos, vals[::-1], color="C1")
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(labels[::-1])
+        ax.set_xlabel("delta prob (base - masked)")
+        ax.set_title(f"Top-{len(labels)} neighbor impacts for edge {edge_gid} (class={target_class})")
+        plt.tight_layout()
+        plt.show()
+        return impacts, labels, vals
+
+    raise RuntimeError(f"global edge id {edge_gid} not found in loader batches")
+
