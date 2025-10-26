@@ -400,23 +400,47 @@ def plot_signed_topk(class2_signed, feature_names, id2label, k=10, save_dir="art
 # “perturbation/ablation” estimate of structural contribution
 def neighbor_impact_approx(model, h_dst, src_pos, dst_pos, e_feat_row, neighbors_pos, device="cpu", target_class=None):
     """
-    h_dst: (D, hidden) embeddings for dst nodes in last block
-    src_pos, dst_pos: tensors (B,), pick the one edge by index 'pos'
+    h_dst: (N_dst, hidden) embeddings for dst nodes in last block
+    src_pos, dst_pos: scalar indices (int or 0-d tensor) inside h_dst for the chosen edge endpoints
     neighbors_pos: list[int] positions in h_dst to "mask"
     Returns: dict {neighbor_idx_in_block -> delta_prob[target_class]}
     """
+    import torch
     impacts = {}
-    base_logits = model.edge_mlp(torch.cat([torch.cat([h_dst[src_pos], h_dst[dst_pos]], dim=1),
-                                            e_feat_row[None,:].to(device).expand(h_dst.size(0), -1)], dim=1))
-    base_prob = torch.softmax(base_logits, dim=1)[0, target_class].item()
+    model.eval()
+    with torch.no_grad():
+        # ensure scalar indices
+        if isinstance(src_pos, torch.Tensor):
+            s_idx = int(src_pos.item())
+        else:
+            s_idx = int(src_pos)
+        if isinstance(dst_pos, torch.Tensor):
+            d_idx = int(dst_pos.item())
+        else:
+            d_idx = int(dst_pos)
 
-    for n in neighbors_pos:
-        h_mod = h_dst.clone()
-        h_mod[n] = 0.0
-        logits = model.edge_mlp(torch.cat([torch.cat([h_mod[src_pos], h_mod[dst_pos]], dim=1),
-                                           e_feat_row[None,:].to(device)], dim=1))
-        prob   = torch.softmax(logits, dim=1)[0, target_class].item()
-        impacts[int(n)] = base_prob - prob  # positive => neighbor increased prob for class
+        # extract row vectors and make batch dim (1, hidden)
+        src_vec = h_dst[s_idx].to(device).unsqueeze(0)   # (1, hidden)
+        dst_vec = h_dst[d_idx].to(device).unsqueeze(0)   # (1, hidden)
+        e_vec   = e_feat_row.to(device).unsqueeze(0).float()  # (1, feat_dim)
+
+        inp = torch.cat([src_vec, dst_vec, e_vec], dim=1)  # (1, 2*hidden + feat_dim)
+        base_logits = model.edge_mlp(inp)                  # (1, num_classes)
+        # determine target class if not provided
+        if target_class is None:
+            target_class = int(torch.argmax(base_logits, dim=1)[0].item())
+        base_prob = torch.softmax(base_logits, dim=1)[0, target_class].item()
+
+        for n in neighbors_pos:
+            # clone and mask single neighbor
+            h_mod = h_dst.clone().to(device)
+            h_mod[int(n)] = 0.0
+            src_vec_m = h_mod[s_idx].unsqueeze(0)
+            dst_vec_m = h_mod[d_idx].unsqueeze(0)
+            inp_m = torch.cat([src_vec_m, dst_vec_m, e_vec], dim=1)
+            logits = model.edge_mlp(inp_m)
+            prob = torch.softmax(logits, dim=1)[0, target_class].item()
+            impacts[int(n)] = base_prob - prob  # positive => neighbor increased prob for class
     return impacts
 
 # Helper to get neighbor positions from a batch
