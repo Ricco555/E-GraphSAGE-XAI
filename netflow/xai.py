@@ -418,3 +418,89 @@ def neighbor_impact_approx(model, h_dst, src_pos, dst_pos, e_feat_row, neighbors
         prob   = torch.softmax(logits, dim=1)[0, target_class].item()
         impacts[int(n)] = base_prob - prob  # positive => neighbor increased prob for class
     return impacts
+
+# Helper to get neighbor positions from a batch
+def get_neighbor_positions_from_batch(blocks, pair_graph, local_eids, edge_idx_local):
+    """
+    Return tuple (src_pos, dst_pos, neighbors_pos, neighbors_global_nids)
+    - src_pos, dst_pos: integer positions inside h_dst for the chosen edge
+    - neighbors_pos: list of integer positions inside h_dst to perturb (src-side positions)
+    - neighbors_global_nids: corresponding global node ids from blocks[0].srcdata[dgl.NID]
+    Assumes blocks[0] is the sampled (bipartite) block used to compute h_dst.
+    """
+    # edges in the pair_graph batch (local positions inside pair_graph)
+    src_pos_tensor, dst_pos_tensor = pair_graph.edges()
+    local_eids_arr = np.asarray(local_eids, dtype=np.int64)
+    pos = int(np.where(local_eids_arr == edge_idx_local)[0][0])
+    src_pos = int(src_pos_tensor[pos].item())
+    dst_pos = int(dst_pos_tensor[pos].item())
+
+    # block-level source node global ids and edge lists (block 0)
+    b0 = blocks[0]
+    b0_u, b0_v = b0.edges()
+    src_global = b0.srcdata[dgl.NID].cpu().numpy()  # array length = b0.num_src_nodes()
+    # neighbors: any src node that connects to either dst_pos or src_pos (heuristic)
+    # choose all src indices u where v == dst_pos OR v == src_pos
+    u = b0_u.cpu().numpy().astype(np.int64)
+    v = b0_v.cpu().numpy().astype(np.int64)
+    # select positions in src node array (u are indices into src nodes)
+    mask = (v == dst_pos) | (v == src_pos) | (u == dst_pos) | (u == src_pos)
+    neigh_src_positions = np.unique(u[mask]).tolist()
+    # remove the actual source and destination positions so we perturb "others"
+    neigh_src_positions = [int(x) for x in neigh_src_positions if int(x) not in (src_pos, dst_pos)]
+    neighbors_global_nids = [int(src_global[p]) for p in neigh_src_positions]
+    return src_pos, dst_pos, neigh_src_positions, neighbors_global_nids
+
+def visualize_neighbor_impacts(model, loader, g, edge_idx_local, split_dir, topk=10, device="cpu", target_class=0):
+    """
+    High-level helper: find a loader batch containing edge_idx_local, compute h_dst,
+    get neighbor positions and run neighbor_impact_approx. Plot topk neighbors by abs(delta).
+    """
+    model.eval()
+    torch.set_grad_enabled(False)
+
+    he_fixed = None
+    for input_nodes, pair_graph, blocks in loader:
+        local_eids = pair_graph.edata[dgl.EID].cpu().numpy().astype(np.int64)
+        if edge_idx_local in local_eids:
+            # move blocks/pair_graph to device
+            blocks = [b.to(device) for b in blocks] if blocks else blocks
+            pair_graph = pair_graph.to(device)
+            # compute embeddings
+            h_dst = compute_pair_embedding(model, blocks, x_nodes=None)  # (D, hidden)
+            # compute positions and neighbor list
+            src_pos, dst_pos, neighbors_pos, neighbors_global_nids = get_neighbor_positions_from_batch(blocks, pair_graph, local_eids, edge_idx_local)
+            # ensure tensors/inputs on device
+            h_dst = h_dst.to(device)
+            e_feat_np = fetch_edge_features(np.array([g.edata[dgl.EID][torch.from_numpy(local_eids)][np.where(local_eids==edge_idx_local)[0][0]]]), split_dir)
+            e_feat = torch.from_numpy(e_feat_np[0]).to(device).float()
+            # run neighbor impact approx
+            impacts = neighbor_impact_approx(model, h_dst, torch.tensor(src_pos, dtype=torch.long, device=device),
+                                            torch.tensor(dst_pos, dtype=torch.long, device=device),
+                                            e_feat, neighbors_pos, device=device, target_class=target_class)
+            # build DataFrame-like sorted list
+            items = sorted(impacts.items(), key=lambda x: abs(x[1]), reverse=True)
+            items = items[:topk]
+            labels = []
+            vals = []
+            for pos_idx, delta in items:
+                # map pos_idx -> global nid (guard)
+                try:
+                    gid = neighbors_global_nids[neighbors_pos.index(pos_idx)]
+                except Exception:
+                    gid = int(blocks[0].srcdata[dgl.NID][pos_idx].item()) if 'srcdata' in blocks[0].__dict__ else int(pos_idx)
+                labels.append(f"nid={gid}")
+                vals.append(delta)
+            # plot
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots(figsize=(8, max(3, 0.35*len(labels))))
+            y_pos = range(len(labels))
+            ax.barh(y_pos, vals[::-1], color="C1")
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels(labels[::-1])
+            ax.set_xlabel("delta prob (base - masked)")
+            ax.set_title(f"Top-{len(labels)} neighbor impacts for local edge {edge_idx_local} (class={target_class})")
+            plt.tight_layout()
+            plt.show()
+            return impacts, labels, vals
+    raise RuntimeError(f"local edge {edge_idx_local} not found in loader batches")
