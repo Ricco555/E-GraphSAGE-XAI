@@ -494,6 +494,19 @@ def visualize_neighbor_impacts(model, loader, g, edge_idx_local, split_dir, topk
             h_dst = compute_pair_embedding(model, blocks, x_nodes=None)  # (D, hidden)
             # compute positions and neighbor list
             src_pos, dst_pos, neighbors_pos, neighbors_global_nids = get_neighbor_positions_from_batch(blocks, pair_graph, local_eids, edge_idx_local)
+
+            # --- PRAGMATIC FIX: filter neighbors that are valid indices into h_dst ---
+            h_dst_len = int(h_dst.size(0))
+            paired = list(zip([int(p) for p in neighbors_pos], [int(g) for g in neighbors_global_nids]))
+            valid = [(p, g) for p, g in paired if 0 <= p < h_dst_len]
+            if len(valid) < len(paired):
+                print(f"warning: filtered {len(paired)-len(valid)} neighbor(s) out-of-range for h_dst (len={h_dst_len})")
+            if len(valid) == 0:
+                raise RuntimeError("no valid neighbor positions remain after filtering; consider computing src embeddings or remapping indices")
+            neighbors_pos = [p for p, _ in valid]
+            neighbors_global_nids = [g for _, g in valid]
+            # --- end fix ---
+
             # ensure tensors/inputs on device
             h_dst = h_dst.to(device)
             e_feat_np = fetch_edge_features(np.array([g.edata[dgl.EID][torch.from_numpy(local_eids)][np.where(local_eids==edge_idx_local)[0][0]]]), split_dir)
