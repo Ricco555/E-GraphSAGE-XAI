@@ -71,11 +71,18 @@ class _FallbackEdgeGraphSAGE(nn.Module):
         e_repr = torch.cat([h[u], h[v], e_feat], dim=1)
         return self.edge_mlp(e_repr)
     
-    def encode(self, blocks: list[dgl.DGLBlock], x_nodes: torch.Tensor) -> torch.Tensor:
+    def encode(self, blocks: list[dgl.DGLBlock], x_nodes: torch.Tensor, return_src: bool = False) -> torch.Tensor:
         """
         Compute node embeddings for the last block's destination nodes by running the same
         per-block SAGE + norm + activation pipeline used in forward; returns the embeddings
         for the destination nodes of the final block.
+
+        Backwards compatible:
+        - Default (return_src=False): returns last_h_dst exactly as before.
+        - If return_src=True: returns (h_src_init, last_h_dst) where h_src_init are the
+          input node embeddings for blocks[0].src nodes (learned constant or x_nodes).
+          This avoids breaking existing callers while enabling caller code that needs
+          src-aligned embeddings (e.g. structural XAI helpers).
         """
         # Initialize node features (either provided or learned constant if no node feats)
         if x_nodes is None:
@@ -86,6 +93,9 @@ class _FallbackEdgeGraphSAGE(nn.Module):
         else:
             h = x_nodes
 
+        # capture initial src-aligned embeddings if requested (keep a copy)
+        h_src_init = h.clone() if return_src else None
+
         last_h_dst = None
         # Apply same conv -> norm -> relu sequence as in forward
         for conv, bn, block in zip(self.sage, self.norms, blocks):
@@ -95,6 +105,8 @@ class _FallbackEdgeGraphSAGE(nn.Module):
             h = torch.relu(h)
 
         # return embeddings for destination nodes of the last block
+        if return_src:
+            return (h_src_init, last_h_dst)
         return last_h_dst
 
     def predict_from_embeddings(self, h_dst: torch.Tensor, pair_graph: dgl.DGLGraph, e_feat: torch.Tensor) -> torch.Tensor:

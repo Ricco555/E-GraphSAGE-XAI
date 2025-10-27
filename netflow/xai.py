@@ -150,8 +150,12 @@ def compute_pair_embedding(model, blocks, x_nodes, return_src: bool = False):
 
     This preserves the original behavior for callers that expect a single h_dst tensor.
     """
-    # call model.encode (keep existing behaviour)
-    res = model.encode(blocks, x_nodes)
+    # call model.encode and forward the return_src request when present
+    try:
+        res = model.encode(blocks, x_nodes, return_src=return_src)
+    except TypeError:
+        # model.encode doesn't accept return_src (legacy) — call without it
+        res = model.encode(blocks, x_nodes)
 
     if not return_src:
         return res
