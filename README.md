@@ -5,6 +5,8 @@ Short project description
 - Pipeline to build and explain edge aware GraphSAGE models on temporaly processed NetFlow-style dataset.  
 - Focus: preprocess NetFlow records into graph data, train/evaluate GNNs, produce XAI artefacts for model interpretation.
 
+Go to netflow folder. All files are located there.
+
 ## Dataset
 - Source: raw NetFlow/flow-record exports (CSV) containing typical fields (timestamps, src/dst IP, src/dst port, protocol, bytes, packets, labels/alerts).  
 - Layout: put raw netflow files under `data/`. Check Cell 3 in first jupyter notebook. Processed graph datasets are written to `artifacts` (formats: Parquet/CSV for tabular features, serialized graph objects).  
