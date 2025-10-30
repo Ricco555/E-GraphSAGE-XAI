@@ -2,6 +2,7 @@ import os, joblib, json, numpy as np, torch, shap, matplotlib.pyplot as plt
 from typing import Tuple
 import dgl
 from traitlets import List
+from numpy.random import default_rng
 from feature_store import fetch_edge_features
 
 def load_feature_names(feature_store_dir: str) -> Tuple[List[str], int, int]:
@@ -428,7 +429,7 @@ def plot_topk_per_class(class2_vals, feature_names, id2label, k=10, save_dir="ar
     - id2label: mapping class_id -> human label
     - k: top-k features
     - title: chart title prefix (e.g. "Top-k Feature Importances" or "Top-k Feature Impacts")
-    - signed: if True treat values as signed and color bars (green>0, red<=0) and draw zero line
+    - signed: if True treat values as signed and color bars (blue>0, red<=0) and draw zero line
     """
     os.makedirs(save_dir, exist_ok=True)
     for c, vals_raw in class2_vals.items():
@@ -439,7 +440,7 @@ def plot_topk_per_class(class2_vals, feature_names, id2label, k=10, save_dir="ar
             top_idx = np.argsort(np.abs(vals_arr))[::-1][:k]
             names = [feature_names[i] for i in top_idx][::-1]
             vals = vals_arr[top_idx][::-1]
-            colors = ["green" if x > 0 else "red" for x in vals]
+            colors = ["blue" if x > 0 else "red" for x in vals]
             plt.figure(figsize=(8, 5))
             plt.barh(names, vals, color=colors)
             plt.axvline(0, color="k", lw=1)
@@ -743,3 +744,100 @@ def plot_grouped_shap_bar(groups, values, color_map: CategoryColorMap,
         os.makedirs(os.path.dirname(savepath), exist_ok=True)
         plt.savefig(savepath, dpi=150, bbox_inches="tight")
     plt.show()
+
+def beeswarm_for_class(model, g, loader, split_dir, class_id,
+                       n_samples=200, background_size=100,
+                       top_k=20, device="cpu", savepath=None):
+    S, X, feature_names = shap_matrix_for_class(
+        model, g, loader, split_dir, class_id,
+        n_samples=n_samples, background_size=background_size, device=device
+    )
+
+    # rank features by mean |SHAP|
+    mean_abs = np.abs(S).mean(axis=0)
+    k = min(top_k, S.shape[1])
+    top_idx = np.argpartition(mean_abs, -k)[-k:]
+    top_idx = top_idx[np.argsort(mean_abs[top_idx])][::-1]  # descending
+
+    S_top = S[:, top_idx]
+    X_top = X[:, top_idx]
+    names_top = [feature_names[i] for i in top_idx]
+
+    # classic API (works in most versions)
+    plt.figure(figsize=(8, 5))
+    shap.summary_plot(S_top, X_top, feature_names=names_top, plot_type="dot", show=False)
+    title = f"SHAP beeswarm — class {class_id}"
+    plt.title(title, fontsize=12)
+    plt.tight_layout()
+    if savepath:
+        os.makedirs(os.path.dirname(savepath), exist_ok=True)
+        plt.savefig(savepath, dpi=150, bbox_inches="tight")
+    plt.show()
+
+def shap_matrix_for_class(model, g, loader, split_dir, class_id: int,
+                          n_samples=200, background_size=100, device="cpu"):
+    """
+    Build SHAP (n,d) and feature (n,d) matrices for a given class.
+    - model: trained SAGE edge model
+    - g, loader, split_dir: your val/test graph + loader + store dir
+    - class_id: target class to explain
+    - n_samples: how many edges of this class to sample
+    - background_size: KernelSHAP background size
+    Returns:
+      S (n,d): SHAP values per edge (signed), X (n,d): edge features, feature_names
+    """
+    from feature_store import fetch_edge_features
+    # you already wrote this; import the same function used elsewhere:
+    from xai import local_shap_for_edge   # your existing helper that freezes [h_src||h_dst]
+
+    rng = default_rng(0)
+    y_all = g.edata["y"].cpu().numpy()
+    idx_c = np.where(y_all == class_id)[0]
+    if idx_c.size == 0:
+        raise ValueError(f"No edges with class={class_id}.")
+
+    take = min(n_samples, idx_c.size)
+    sample_eids = rng.choice(idx_c, size=take, replace=False).astype(int)
+
+    S_rows, X_rows = [], []
+    # Get d from one probe
+    # (you already have feature_names; if not, load from store artifacts)
+    # Example:
+    # feature_names, d_num, d_cat = load_feature_names_from_store(split_dir)
+    # d = d_num + d_cat
+    # We'll infer d from the first successful SHAP call.
+    d = None
+    feature_names = globals().get("feature_names", None)  # use your loaded names
+
+    for eid_local in sample_eids:
+        try:
+            # returns sv for the TARGET class if you pass target_class=class_id
+            sv, x_edge, y_true, base_val = local_shap_for_edge(
+                model, g, loader, int(eid_local),
+                split_dir, background_size=background_size,
+                target_class=class_id, device=device
+            )
+            # unify shape to (d,)
+            sv = np.asarray(sv, dtype=float).reshape(-1)
+            x_edge = np.asarray(x_edge, dtype=float).reshape(-1)
+
+            if d is None:
+                d = sv.size
+                if feature_names is None or len(feature_names) != d:
+                    # fallback to generic names if not already loaded or mismatched
+                    feature_names = [f"f{i}" for i in range(d)]
+
+            # keep rows aligned with feature dimension
+            if sv.size == d and x_edge.size == d:
+                S_rows.append(sv)
+                X_rows.append(x_edge)
+        except Exception:
+            continue  # skip SHAP failures on some edges
+
+    if not S_rows:
+        raise RuntimeError("No SHAP rows collected; increase n_samples or check helper.")
+
+    # Use np.vstack (replacement for deprecated np.row_stack)
+    S = np.vstack(S_rows).astype(float, copy=False)   # (n,d)
+    X = np.vstack(X_rows).astype(float, copy=False)   # (n,d)
+    return S, X, feature_names
