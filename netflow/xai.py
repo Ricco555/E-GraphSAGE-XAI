@@ -440,7 +440,7 @@ def plot_topk_per_class(class2_vals, feature_names, id2label, k=10, save_dir="ar
             top_idx = np.argsort(np.abs(vals_arr))[::-1][:k]
             names = [feature_names[i] for i in top_idx][::-1]
             vals = vals_arr[top_idx][::-1]
-            colors = ["blue" if x > 0 else "red" for x in vals]
+            colors = ['#1f77b4' if x > 0 else "red" for x in vals]
             plt.figure(figsize=(8, 5))
             plt.barh(names, vals, color=colors)
             plt.axvline(0, color="k", lw=1)
