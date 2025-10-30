@@ -1,8 +1,5 @@
 __pycache__/
+visualisation/
 artifacts/
 feature_store/
 graphs/
-checkpoints/
-op_data/
-op_results/
-images/
