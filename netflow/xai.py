@@ -342,9 +342,8 @@ def sample_edges_by_class(g, n_per_class=200, seed=0):
     rng = np.random.default_rng(seed)
     y = g.edata["y"].cpu().numpy()
     out = {}
-    for c in range(int(y.max())+1):
-        idx = np.where(y == c)[0]
-        if idx.size == 0: continue
+    for c in np.unique(y):  # iterating only existing classes is more efficient then iterate empty classes
+        idx = np.nonzero(y == c)[0]
         k = min(n_per_class, idx.size)
         out[c] = rng.choice(idx, size=k, replace=False).tolist()
     return out
@@ -368,23 +367,11 @@ def aggregate_shap_per_class(model, g, loader, split_dir, feature_names, n_per_c
             class2_meanabs[c] = np.mean(np.vstack(vals), axis=0)
     return class2_meanabs
 
-# Plot top-k features per class
-def plot_topk_bar_per_class(class2_meanabs, feature_names, id2label, k=10, save_dir="artifacts/xai"):
-    os.makedirs(save_dir, exist_ok=True)
-    for c, imp in class2_meanabs.items():
-        top_idx = np.argsort(imp)[::-1][:k]
-        plt.figure(figsize=(8,5))
-        plt.barh([feature_names[i] for i in top_idx][::-1], imp[top_idx][::-1])
-        plt.title(f"Top-{k} Feature Importances (mean |SHAP|) — {id2label[c]}")
-        plt.tight_layout()
-        plt.savefig(os.path.join(save_dir, f"topk_shap_{id2label[c]}.png"), dpi=150)
-        plt.show()
-
 # Spider (radar) plot across classes
-def plot_spider(class2_meanabs, feature_names, id2label, k_union=8, save_path="artifacts/xai/spider.png"):
+def plot_spider(class2_vals, feature_names, id2label, k_union=8, save_path="artifacts/xai/spider.png"):
     # 1) choose the union of top features
     chosen = set()
-    for c, imp in class2_meanabs.items():
+    for c, imp in class2_vals.items():
         top = np.argsort(imp)[::-1][:k_union]
         chosen.update(top.tolist())
     chosen = sorted(chosen)
@@ -392,9 +379,9 @@ def plot_spider(class2_meanabs, feature_names, id2label, k_union=8, save_path="a
 
     # 2) normalize per class to [0,1]
     data = []
-    classes_order = sorted(class2_meanabs.keys())
+    classes_order = sorted(class2_vals.keys())
     for c in classes_order:
-        imp = class2_meanabs[c][chosen]
+        imp = class2_vals[c][chosen]
         imp_norm = (imp - imp.min()) / (imp.max() - imp.min() + 1e-12)
         data.append(imp_norm)
     data = np.vstack(data)
@@ -430,20 +417,47 @@ def aggregate_signed_shap_per_class(model, g, loader, split_dir, feature_names, 
             class2_signed[c] = np.mean(np.vstack(vals), axis=0)
     return class2_signed
 
-def plot_signed_topk(class2_signed, feature_names, id2label, k=10, save_dir="artifacts/xai"):
+# Plot top-k features per class
+def plot_topk_per_class(class2_vals, feature_names, id2label, k=10, save_dir="artifacts/xai",
+                        title="Top-k Feature Importances", signed=False):
+    """
+    Unified plotter for per-class top-k features.
+
+    - class2_vals: dict[class_id] -> 1D array-like of values (mean|SHAP| or signed SHAP)
+    - feature_names: list of feature names
+    - id2label: mapping class_id -> human label
+    - k: top-k features
+    - title: chart title prefix (e.g. "Top-k Feature Importances" or "Top-k Feature Impacts")
+    - signed: if True treat values as signed and color bars (green>0, red<=0) and draw zero line
+    """
     os.makedirs(save_dir, exist_ok=True)
-    for c, v in class2_signed.items():
-        # pick k with largest |effect|
-        top_idx = np.argsort(np.abs(v))[::-1][:k]
-        names = [feature_names[i] for i in top_idx][::-1]
-        vals  = v[top_idx][::-1]
-        colors = ["green" if x>0 else "red" for x in vals]
-        plt.figure(figsize=(8,5))
-        plt.barh(names, vals, color=colors)
-        plt.axvline(0, color="k", lw=1)
-        plt.title(f"Top-{k} Feature Impacts (signed SHAP) — {id2label[c]}")
+    for c, vals_raw in class2_vals.items():
+        vals_arr = np.asarray(vals_raw)
+        if vals_arr.size == 0:
+            continue
+        if signed:
+            top_idx = np.argsort(np.abs(vals_arr))[::-1][:k]
+            names = [feature_names[i] for i in top_idx][::-1]
+            vals = vals_arr[top_idx][::-1]
+            colors = ["green" if x > 0 else "red" for x in vals]
+            plt.figure(figsize=(8, 5))
+            plt.barh(names, vals, color=colors)
+            plt.axvline(0, color="k", lw=1)
+        else:
+            top_idx = np.argsort(vals_arr)[::-1][:k]
+            names = [feature_names[i] for i in top_idx][::-1]
+            vals = vals_arr[top_idx][::-1]
+            plt.figure(figsize=(8, 5))
+            plt.barh(names, vals)
+
+        label = id2label.get(c, str(c))
+        plt.title(f"{title} — {label}")
         plt.tight_layout()
-        plt.savefig(os.path.join(save_dir, f"signed_shap_{id2label[c]}.png"), dpi=150)
+        # safe filename derived from title and label
+        safe_title = "".join(ch if ch.isalnum() or ch in (" ", "_", "-") else "_" for ch in title).strip().lower().replace(" ", "_")
+        safe_label = "".join(ch if ch.isalnum() or ch in (" ", "_", "-") else "_" for ch in str(label)).strip().lower().replace(" ", "_")
+        fname = os.path.join(save_dir, f"{safe_title}_{safe_label}.png")
+        plt.savefig(fname, dpi=150)
         plt.show()
 
 # Structural XAI: neighbor masking
@@ -603,3 +617,129 @@ def visualize_neighbor_impacts(model, loader, g, edge_gid, split_dir, topk=10, d
 
     raise RuntimeError(f"global edge id {edge_gid} not found in loader batches")
 
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+from collections import defaultdict
+
+def build_group_index(feature_names, cat_delim="=", numeric_as_own_group=True, custom_map=None):
+    """
+    Build a mapping: group_name -> list of feature indices (cols).
+    - Categorical one-hots are detected by 'cat_delim' (default '='), e.g. 'PROTOCOL=6' -> group 'PROTOCOL'.
+    - Numeric features become their own groups (group == feature name), unless custom_map remaps them.
+    - custom_map (dict[str->str]) lets you override grouping for any feature or category group.
+    Returns:
+      group2idx: dict[group_name] -> list[int]
+      col2group: list[str] of length d (group name for each feature)
+    """
+    d = len(feature_names)
+    col2group = [None]*d
+    group2idx = defaultdict(list)
+
+    for j, name in enumerate(feature_names):
+        if custom_map and name in custom_map:
+            g = custom_map[name]
+        else:
+            if cat_delim in name:                 # categorical one-hot
+                g = name.split(cat_delim, 1)[0]   # prefix before '='
+                if custom_map and g in custom_map:
+                    g = custom_map[g]
+            else:
+                g = name if numeric_as_own_group else "NUMERIC"
+        col2group[j] = g
+        group2idx[g].append(j)
+
+    return dict(group2idx), col2group
+
+
+def shap_to_group_values(shap_vec, feature_names, mode="signed_sum", **group_kwargs):
+    """
+    Aggregate a SHAP vector over groups defined by build_group_index(...).
+    Parameters
+      shap_vec: np.ndarray shape (d,) or (1,d) (signed SHAP for a sample or mean over samples)
+      feature_names: list[str] length d
+      mode:
+        - "signed_sum": sum of SHAP within group (keeps direction; good for signed mean SHAP)
+        - "signed_mean": mean of SHAP within group
+        - "abs_sum": sum of |SHAP| within group (good for feature ranking)
+        - "abs_mean": mean of |SHAP| within group
+      group_kwargs: passed to build_group_index(...)
+    Returns
+      groups: list[str] group names
+      values: np.ndarray shape (G,) aggregated per group in the same order as 'groups'
+      group2idx: dict[group -> list[int]] (for drill-down)
+    """
+    v = np.asarray(shap_vec, dtype=float).reshape(-1)  # (d,)
+    assert v.size == len(feature_names), f"shap dim {v.size} != names {len(feature_names)}"
+
+    group2idx, _ = build_group_index(feature_names, **group_kwargs)
+    groups, vals = [], []
+    for g, idxs in group2idx.items():
+        sub = v[idxs]
+        if mode == "signed_sum":
+            agg = sub.sum()
+        elif mode == "signed_mean":
+            agg = sub.mean()
+        elif mode == "abs_sum":
+            agg = np.abs(sub).sum()
+        elif mode == "abs_mean":
+            agg = np.abs(sub).mean()
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
+        groups.append(g); vals.append(agg)
+
+    return groups, np.asarray(vals, dtype=float), group2idx
+
+class CategoryColorMap:
+    """
+    Deterministic color assignment for category groups across multiple plots.
+    Reuse the same instance in all your figures to keep colors stable.
+    """
+    def __init__(self, palette=None):
+        # default palette: tab20
+        if palette is None:
+            # 20 distinct colors (repeat if you exceed 20 groups)
+            palette = plt.get_cmap("tab20").colors
+        self.palette = list(palette)
+        self.map = {}     # group -> color (rgba)
+        self._cursor = 0
+
+    def color(self, group):
+        if group not in self.map:
+            self.map[group] = self.palette[self._cursor % len(self.palette)]
+            self._cursor += 1
+        return self.map[group]
+
+    def colors(self, groups):
+        return [self.color(g) for g in groups]
+
+def plot_grouped_shap_bar(groups, values, color_map: CategoryColorMap,
+                          top_k=10, title="", signed=True, savepath=None):
+    """
+    Plot aggregated SHAP by group.
+    - If signed=True, bars can be positive or negative (directional effect).
+    - If signed=False, plot absolute magnitudes only.
+    """
+    groups = np.asarray(groups)
+    values = np.asarray(values, dtype=float)
+
+    if signed:
+        order = np.argsort(np.abs(values))[-top_k:][::-1]
+    else:
+        values = np.abs(values)
+        order = np.argsort(values)[-top_k:][::-1]
+
+    g_sel = groups[order]
+    v_sel = values[order]
+    cols  = color_map.colors(g_sel)
+
+    plt.figure(figsize=(9, 5))
+    plt.barh(list(g_sel[::-1]), list(v_sel[::-1]), color=cols[::-1])
+    if signed:
+        plt.axvline(0.0, color="k", lw=1)
+    plt.title(title)
+    plt.tight_layout()
+    if savepath:
+        os.makedirs(os.path.dirname(savepath), exist_ok=True)
+        plt.savefig(savepath, dpi=150, bbox_inches="tight")
+    plt.show()
