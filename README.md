@@ -3,7 +3,7 @@ Chronologicaly splitted NetFlow processing pipline for temporaly edge-aware expl
 
 Short project description
 - Pipeline to build and explain edge aware GraphSAGE models on temporaly processed NetFlow-style dataset.  
-- Focus: preprocess NetFlow records into graph data, train/evaluate GNNs, produce XAI artefacts for model interpretation.
+- Focus: preprocess NetFlow records into graph data, train/validate GNN, produce XAI artefacts for model interpretation.
 
 Go to netflow folder. All files are located there.
 
