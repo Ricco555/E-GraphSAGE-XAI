@@ -10,7 +10,7 @@ Go to netflow folder. All files are located there.
 
 # Requirements (you can run in jupyter notebook):
 #choose dgl based on what you have available. This one is for support of nVidia GPU. Code does not have to be changed if you are on cpu only.
-`!pip3 install dgl -f https://data.dgl.ai/wheels/torch-2.3/cu121/repo.html    
+`!pip3 install dgl -f https://data.dgl.ai/wheels/torch-2.3/cu121/repo.html
 !pip3 install torch==2.3.0
 !pip3 install category_encoders
 !pip install shap
