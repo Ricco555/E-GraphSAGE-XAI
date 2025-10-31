@@ -9,11 +9,12 @@ Short project description
 Go to netflow folder. All files are located there.
 
 # Requirements (you can run in jupyter notebook):
-!pip3 install dgl -f https://data.dgl.ai/wheels/torch-2.3/cu121/repo.html    #choose dgl based on what you have available. This one is for support of nVidia GPU. Code does not have to be changed if you are on cpu only.
+#choose dgl based on what you have available. This one is for support of nVidia GPU. Code does not have to be changed if you are on cpu only.
+`!pip3 install dgl -f https://data.dgl.ai/wheels/torch-2.3/cu121/repo.html    
 !pip3 install torch==2.3.0
 !pip3 install category_encoders
 !pip install shap
-!pip install xgboost
+!pip install xgboost`
 
 ## Dataset
 - Source: raw NetFlow/flow-record exports from https://staff.itee.uq.edu.au/marius/NIDS_datasets/ (CSV) containing typical fields (timestamps, src/dst IP, src/dst port, protocol, bytes, packets, labels/alerts).  
