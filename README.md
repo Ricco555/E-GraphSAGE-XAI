@@ -5,10 +5,18 @@ Short project description
 - Pipeline to build and explain edge aware GraphSAGE models on temporaly processed NetFlow-style dataset.  
 - Focus: preprocess NetFlow records into graph data, train/validate GNN, produce XAI artefacts for model interpretation.
 
+## Instructions
 Go to netflow folder. All files are located there.
 
+# Requirements (you can run in jupyter notebook):
+!pip3 install dgl -f https://data.dgl.ai/wheels/torch-2.3/cu121/repo.html    #choose dgl based on what you have available. This one is for support of nVidia GPU. Code does not have to be changed if you are on cpu only.
+!pip3 install torch==2.3.0
+!pip3 install category_encoders
+!pip install shap
+!pip install xgboost
+
 ## Dataset
-- Source: raw NetFlow/flow-record exports (CSV) containing typical fields (timestamps, src/dst IP, src/dst port, protocol, bytes, packets, labels/alerts).  
+- Source: raw NetFlow/flow-record exports from https://staff.itee.uq.edu.au/marius/NIDS_datasets/ (CSV) containing typical fields (timestamps, src/dst IP, src/dst port, protocol, bytes, packets, labels/alerts).  
 - Layout: put raw netflow files under `data/`. Check Cell 3 in first jupyter notebook. Processed graph datasets are written to `artifacts` (formats: Parquet/CSV for tabular features, serialized graph objects).  
 - Preprocessing steps: data cleaning, IP/port encoding, chronological splits, label encoding, numerical transformation, feature engineering, categorical encoding, mini-batch preparation, graph construction (node/edge creation, edge attributes, temporal slices).
 
@@ -31,8 +39,8 @@ Note: run notebooks sequentially because later notebooks depend on processed dat
 - artifacts/xai — PNG figures for XAI results.  
 - artifacts/corr — PNG figures for Correlation results.  
 
-## Quick notes
+## Quick notes and thank you's
 - This research was performed on NetFlow dataset NF-UNSW-NB15-v3 available at the https://staff.itee.uq.edu.au/marius/NIDS_datasets/
 - This research was performed using the Advanced Computing service provided by University of Zagreb University Computing Centre - SRCE
 
-- citation: TE-G-SAGE: Explainable Edge-Aware Graph Neural Networks for Network Intrusion Detection [submitted for peer-review]
+- citation (tba): TE-G-SAGE: Explainable Edge-Aware Graph Neural Networks for Network Intrusion Detection [submitted for peer-review]
