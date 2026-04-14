@@ -1,0 +1,63 @@
+Running training with: {'hidden': 64, 'aggregator': 'mean', 'fanouts': '25,15', 'dropout': 0.4, 'epochs': 20}
+2025-11-30 14:11:15,001 INFO [model] SAGE[0]: in=None out=None hidden=64 edge_in=601 in_node=0
+2025-11-30 14:20:37,368 INFO [timing] epoch: total_loss=1930388.0189 total_time=561.9437s (avg batch 0.203s)
+2025-11-30 14:23:13,747 INFO [timing] epoch: total_loss=129846.2768 total_time=156.3770s (avg batch 0.113s)
+2025-11-30 14:23:13,749 INFO [epoch 01] train loss 1.3601 train acc 0.9650 | val loss 0.1830 val acc 0.9451
+2025-11-30 14:32:40,079 INFO [timing] epoch: total_loss=1514019.2409 total_time=566.3267s (avg batch 0.204s)
+2025-11-30 14:35:14,961 INFO [timing] epoch: total_loss=120878.0935 total_time=154.8792s (avg batch 0.112s)
+2025-11-30 14:35:14,964 INFO [epoch 02] train loss 1.0668 train acc 0.9814 | val loss 0.1703 val acc 0.9427
+2025-11-30 14:44:35,196 INFO [timing] epoch: total_loss=1405058.5482 total_time=560.2316s (avg batch 0.202s)
+2025-11-30 14:47:11,472 INFO [timing] epoch: total_loss=111602.2911 total_time=156.2741s (avg batch 0.113s)
+2025-11-30 14:47:11,475 INFO [epoch 03] train loss 0.9900 train acc 0.9840 | val loss 0.1573 val acc 0.9468
+2025-11-30 14:56:31,873 INFO [timing] epoch: total_loss=1333550.0037 total_time=560.3954s (avg batch 0.202s)
+2025-11-30 14:59:12,982 INFO [timing] epoch: total_loss=99445.7580 total_time=161.1058s (avg batch 0.116s)
+2025-11-30 14:59:12,984 INFO [epoch 04] train loss 0.9396 train acc 0.9854 | val loss 0.1401 val acc 0.9510
+2025-11-30 15:08:37,143 INFO [timing] epoch: total_loss=1294335.7943 total_time=564.1560s (avg batch 0.204s)
+2025-11-30 15:11:14,985 INFO [timing] epoch: total_loss=102890.1247 total_time=157.8395s (avg batch 0.114s)
+2025-11-30 15:11:14,988 INFO [epoch 05] train loss 0.9120 train acc 0.9863 | val loss 0.1450 val acc 0.9486
+2025-11-30 15:20:40,541 INFO [timing] epoch: total_loss=1239320.3584 total_time=565.5526s (avg batch 0.204s)
+2025-11-30 15:23:17,801 INFO [timing] epoch: total_loss=98882.6388 total_time=157.2570s (avg batch 0.113s)
+2025-11-30 15:23:17,803 INFO [epoch 06] train loss 0.8732 train acc 0.9865 | val loss 0.1393 val acc 0.9501
+2025-11-30 15:32:43,203 INFO [timing] epoch: total_loss=1216877.0845 total_time=565.3993s (avg batch 0.204s)
+2025-11-30 15:35:19,329 INFO [timing] epoch: total_loss=91895.5164 total_time=156.1237s (avg batch 0.113s)
+2025-11-30 15:35:19,332 INFO [epoch 07] train loss 0.8574 train acc 0.9871 | val loss 0.1295 val acc 0.9521
+2025-11-30 15:44:42,387 INFO [timing] epoch: total_loss=1194225.4495 total_time=563.0516s (avg batch 0.203s)
+2025-11-30 15:47:18,864 INFO [timing] epoch: total_loss=94644.9654 total_time=156.4744s (avg batch 0.113s)
+2025-11-30 15:47:18,867 INFO [epoch 08] train loss 0.8414 train acc 0.9877 | val loss 0.1334 val acc 0.9516
+2025-11-30 15:56:43,082 INFO [timing] epoch: total_loss=1159908.2187 total_time=564.2151s (avg batch 0.204s)
+2025-11-30 15:59:25,175 INFO [timing] epoch: total_loss=90064.4607 total_time=162.0899s (avg batch 0.117s)
+2025-11-30 15:59:25,177 INFO [epoch 09] train loss 0.8173 train acc 0.9879 | val loss 0.1269 val acc 0.9547
+2025-11-30 16:08:49,544 INFO [timing] epoch: total_loss=1154557.3999 total_time=564.3635s (avg batch 0.204s)
+2025-11-30 16:11:27,091 INFO [timing] epoch: total_loss=91044.3324 total_time=157.5447s (avg batch 0.114s)
+2025-11-30 16:11:27,094 INFO [epoch 10] train loss 0.8135 train acc 0.9880 | val loss 0.1283 val acc 0.9551
+2025-11-30 16:20:53,677 INFO [timing] epoch: total_loss=1139852.6644 total_time=566.5792s (avg batch 0.204s)
+2025-11-30 16:23:30,544 INFO [timing] epoch: total_loss=90276.6480 total_time=156.8651s (avg batch 0.113s)
+2025-11-30 16:23:30,547 INFO [epoch 11] train loss 0.8031 train acc 0.9883 | val loss 0.1272 val acc 0.9531
+2025-11-30 16:33:00,184 INFO [timing] epoch: total_loss=1128809.7857 total_time=569.6364s (avg batch 0.205s)
+2025-11-30 16:35:35,803 INFO [timing] epoch: total_loss=89768.8386 total_time=155.6168s (avg batch 0.112s)
+2025-11-30 16:35:35,806 INFO [epoch 12] train loss 0.7954 train acc 0.9885 | val loss 0.1265 val acc 0.9551
+2025-11-30 16:45:02,798 INFO [timing] epoch: total_loss=1106309.2858 total_time=566.9916s (avg batch 0.205s)
+2025-11-30 16:47:38,783 INFO [timing] epoch: total_loss=93602.1492 total_time=155.9830s (avg batch 0.113s)
+2025-11-30 16:47:38,786 INFO [epoch 13] train loss 0.7795 train acc 0.9886 | val loss 0.1319 val acc 0.9521
+2025-11-30 16:57:05,616 INFO [timing] epoch: total_loss=1094310.5155 total_time=566.8300s (avg batch 0.204s)
+2025-11-30 16:59:45,689 INFO [timing] epoch: total_loss=89836.3799 total_time=160.0706s (avg batch 0.115s)
+2025-11-30 16:59:45,692 INFO [epoch 14] train loss 0.7710 train acc 0.9887 | val loss 0.1266 val acc 0.9547
+2025-11-30 17:09:07,346 INFO [timing] epoch: total_loss=1093190.1261 total_time=561.6543s (avg batch 0.203s)
+2025-11-30 17:11:43,203 INFO [timing] epoch: total_loss=87702.1186 total_time=155.8536s (avg batch 0.112s)
+2025-11-30 17:11:43,205 INFO [epoch 15] train loss 0.7703 train acc 0.9889 | val loss 0.1236 val acc 0.9555
+2025-11-30 17:21:29,799 INFO [timing] epoch: total_loss=1078235.5942 total_time=586.5910s (avg batch 0.212s)
+2025-11-30 17:24:04,875 INFO [timing] epoch: total_loss=89279.5431 total_time=155.0730s (avg batch 0.112s)
+2025-11-30 17:24:04,877 INFO [epoch 16] train loss 0.7597 train acc 0.9890 | val loss 0.1258 val acc 0.9547
+2025-11-30 17:33:32,180 INFO [timing] epoch: total_loss=1051702.4664 total_time=567.3022s (avg batch 0.205s)
+2025-11-30 17:36:09,071 INFO [timing] epoch: total_loss=96705.4822 total_time=156.8885s (avg batch 0.113s)
+2025-11-30 17:36:09,073 INFO [epoch 17] train loss 0.7410 train acc 0.9891 | val loss 0.1363 val acc 0.9509
+2025-11-30 17:45:33,195 INFO [timing] epoch: total_loss=1046808.6410 total_time=564.1216s (avg batch 0.204s)
+2025-11-30 17:48:09,156 INFO [timing] epoch: total_loss=90836.3512 total_time=155.9576s (avg batch 0.113s)
+2025-11-30 17:48:09,158 INFO [epoch 18] train loss 0.7376 train acc 0.9892 | val loss 0.1280 val acc 0.9548
+2025-11-30 17:57:36,047 INFO [timing] epoch: total_loss=1046341.3411 total_time=566.8879s (avg batch 0.205s)
+2025-11-30 18:00:12,480 INFO [timing] epoch: total_loss=88097.4593 total_time=156.4305s (avg batch 0.113s)
+2025-11-30 18:00:12,482 INFO [epoch 19] train loss 0.7372 train acc 0.9893 | val loss 0.1241 val acc 0.9552
+2025-11-30 18:09:34,690 INFO [timing] epoch: total_loss=1034008.9235 total_time=562.2067s (avg batch 0.203s)
+2025-11-30 18:12:10,515 INFO [timing] epoch: total_loss=88091.8772 total_time=155.8232s (avg batch 0.112s)
+2025-11-30 18:12:10,518 INFO [epoch 20] train loss 0.7286 train acc 0.9894 | val loss 0.1241 val acc 0.9539
+2025-11-30 18:12:10,518 INFO Best val acc: 0.9555
