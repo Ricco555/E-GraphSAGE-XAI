@@ -12,3 +12,7 @@ netflow/data/
 *.parquet
 datasets/
 CLAUDE.md
+
+# environment secrets
+.env
+.env.*
