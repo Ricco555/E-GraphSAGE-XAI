@@ -1,0 +1,29 @@
+# Training configuration for E-GraphSAGE on NF-UNSW-NB15-v3.
+#
+# Run: python training/train.py --config configs/train.yaml
+# Override any field with --key value (see training/train.py --help).
+
+dataset:
+  root: datasets/nfunsw_nb15          # GraphBolt OnDiskDataset root (from prepare_data.py)
+
+model:
+  hidden: 128
+  num_layers: 2
+  aggregator: mean                    # mean | pool | lstm | gcn
+  edge_mlp_hidden: 128
+  dropout: 0.3
+
+training:
+  fanouts: [25, 15]                   # outermost → innermost layer
+  batch_size: 2048
+  epochs: 20
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  num_workers: 0
+  seed: 42
+  device: auto                        # auto = cuda if available else cpu
+
+out:
+  artifacts_dir: artifacts
+  checkpoint: artifacts/best_edge_sage.pt
+  train_log: artifacts/train_log.json

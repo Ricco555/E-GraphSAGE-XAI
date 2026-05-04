@@ -1,4 +1,4 @@
-# debug_align.py
+# alignment.py
 from __future__ import annotations
 import os, numpy as np, torch, dgl
 

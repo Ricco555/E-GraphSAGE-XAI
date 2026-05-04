@@ -11,13 +11,8 @@ from dgl.dataloading import NeighborSampler, as_edge_prediction_sampler
 from dgl.dataloading import DataLoader as DGLDataLoader  # avoid torch DataLoader clash
 
 from feature_store import fetch_edge_features, _map_global_to_local
-from debug_align import check_graph_vs_store
-
-# Try to import your model; if unavailable, use a fallback.
-try:
-    from model import EdgeGraphSAGE  # must implement forward(blocks, x_nodes, pair_graph, e_feat)
-except Exception:
-    EdgeGraphSAGE = None
+from utils.alignment import check_graph_vs_store
+from models.edge_graphsage import EdgeGraphSAGE
 
 
 def _setup_logging(debug: bool):
@@ -25,103 +20,6 @@ def _setup_logging(debug: bool):
     logging.basicConfig(level=lvl, format="%(asctime)s %(levelname)s %(message)s",
                         stream=sys.stdout, force=True)
     os.environ["PYTHONUNBUFFERED"] = "1"
-
-# ---------------- Fallback model (used only if you don't provide model.py) ----------------
-class _FallbackEdgeGraphSAGE(nn.Module):
-    def __init__(self, in_node=0, hidden=128, num_layers=2, aggregator='mean',
-                 edge_in=0, edge_mlp_hidden=128, num_classes=8, dropout=0.3):
-        super().__init__()
-        import dgl.nn as dglnn
-        self.sage = nn.ModuleList()
-        self.norms = nn.ModuleList()
-        self.use_dummy_nodes = (in_node == 0)
-
-        for li in range(num_layers):
-            if li == 0:
-                in_dim = in_node if in_node > 0 else hidden  # KEY: if no node feats, first layer takes `hidden`
-            else:
-                in_dim = hidden
-            self.sage.append(dglnn.SAGEConv(in_dim, hidden, aggregator_type=aggregator))
-            self.norms.append(nn.BatchNorm1d(hidden))
-
-        if self.use_dummy_nodes:
-            self.node_embed = nn.Embedding(1, hidden)  # learned constant node embedding
-
-        self.edge_mlp = nn.Sequential(
-            nn.Linear(hidden * 2 + edge_in, edge_mlp_hidden),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(edge_mlp_hidden, num_classes),
-        )
-
-    def forward(self, blocks, x_nodes, pair_graph, e_feat):
-        if x_nodes is None:
-            h = self.node_embed.weight[0].expand(
-                blocks[0].num_src_nodes(), self.node_embed.embedding_dim
-            )
-        else:
-            h = x_nodes
-
-        for conv, bn, block in zip(self.sage, self.norms, blocks):
-            h_dst = h[:block.num_dst_nodes()]
-            h = conv(block, (h, h_dst))
-            h = bn(h)
-            h = torch.relu(h)
-
-        u, v = pair_graph.edges(form='uv')
-        e_repr = torch.cat([h[u], h[v], e_feat], dim=1)
-        return self.edge_mlp(e_repr)
-    
-    def encode(self, blocks: list[dgl.DGLBlock], x_nodes: torch.Tensor, return_src: bool = False) -> torch.Tensor:
-        """
-        Compute node embeddings for the last block's destination nodes by running the same
-        per-block SAGE + norm + activation pipeline used in forward; returns the embeddings
-        for the destination nodes of the final block.
-
-        Backwards compatible:
-        - Default (return_src=False): returns last_h_dst exactly as before.
-        - If return_src=True: returns (h_src_init, last_h_dst) where h_src_init are the
-          input node embeddings for blocks[0].src nodes (learned constant or x_nodes).
-          This avoids breaking existing callers while enabling caller code that needs
-          src-aligned embeddings (e.g. structural XAI helpers).
-        """
-        # Initialize node features (either provided or learned constant if no node feats)
-        if x_nodes is None:
-            # Expand learned constant node embedding to match the number of source nodes for the first block
-            h = self.node_embed.weight[0].expand(
-                blocks[0].num_src_nodes(), self.node_embed.embedding_dim
-            )
-        else:
-            h = x_nodes
-
-        # capture initial src-aligned embeddings if requested (keep a copy)
-        h_src_init = h.clone() if return_src else None
-
-        last_h_dst = None
-        # Apply same conv -> norm -> relu sequence as in forward
-        for conv, bn, block in zip(self.sage, self.norms, blocks):
-            last_h_dst = h[:block.num_dst_nodes()]
-            h = conv(block, (h, last_h_dst))
-            h = bn(h)
-            h = torch.relu(h)
-
-        # return embeddings for destination nodes of the last block
-        if return_src:
-            return (h_src_init, last_h_dst)
-        return last_h_dst
-
-    def predict_from_embeddings(self, h_dst: torch.Tensor, pair_graph: dgl.DGLGraph, e_feat: torch.Tensor) -> torch.Tensor:
-        """
-        Compute logits for edges in pair_graph given precomputed dst-endpoint embeddings `h_dst`.
-        Assumes `pair_graph` node indexing aligns with rows of `h_dst` (i.e. edges refer to indices
-        within the block that produced `h_dst`).
-        """
-        with pair_graph.local_scope():
-            src, dst = pair_graph.edges(form='uv')
-            # gather endpoint embeddings and concatenate with edge features
-            he = torch.cat([h_dst[src], h_dst[dst]], dim=1)  # (B, 2*hidden)
-            x = torch.cat([he, e_feat], dim=1)               # (B, 2*hidden + edge_in)
-            return self.edge_mlp(x)
 
 # ---------------- DataLoader (edge mode) ----------------
 def make_edge_loader(g: dgl.DGLGraph, batch_size=2048, fanouts=(25, 15),
@@ -327,8 +225,7 @@ def run_training(args: argparse.Namespace | SimpleNamespace):
         in_node = 0
 
     # Build model
-    ModelClass = EdgeGraphSAGE if EdgeGraphSAGE is not None else _FallbackEdgeGraphSAGE
-    model = ModelClass(
+    model = EdgeGraphSAGE(
         in_node=in_node, hidden=args.hidden, num_layers=args.layers, aggregator=args.aggregator,
         edge_in=edge_in, edge_mlp_hidden=args.edge_mlp_hidden, num_classes=num_classes,
         dropout=args.dropout

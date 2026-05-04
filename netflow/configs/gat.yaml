@@ -1,0 +1,29 @@
+# GAT edge-classifier baseline configuration.
+#
+# Run: python scripts/train_gat.py --config configs/gat.yaml
+
+dataset:
+  root: datasets/nfunsw_nb15
+
+model:
+  type: gat
+  hidden: 128
+  num_heads: 4
+  num_layers: 2
+  edge_mlp_hidden: 128
+  dropout: 0.3
+
+training:
+  fanouts: [25, 15]
+  batch_size: 2048
+  epochs: 20
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  num_workers: 0
+  seed: 42
+  device: auto
+
+out:
+  artifacts_dir: artifacts
+  checkpoint: artifacts/best_gat.pt
+  train_log: artifacts/train_log_gat.json

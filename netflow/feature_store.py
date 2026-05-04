@@ -7,8 +7,8 @@ from typing import Tuple, Optional, Dict
 import numpy as np
 from scipy import sparse
 
-from feature_numeric import fit_numeric_transform, transform_numeric
-from categorical_encoding import fit_categorical_transform, transform_categorical
+from datasets.feature_numeric import fit_numeric_transform, transform_numeric
+from datasets.categorical_encoding import fit_categorical_transform, transform_categorical
 
 
 # ---------- low-level I/O ----------

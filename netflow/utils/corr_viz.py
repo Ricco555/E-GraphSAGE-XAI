@@ -1,4 +1,4 @@
-# numeric_corr_viz.py
+# corr_viz.py
 from __future__ import annotations
 
 import os

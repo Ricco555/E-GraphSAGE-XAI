@@ -3,4 +3,11 @@ visualisation/
 artifacts/
 feature_store/
 graphs/
+
+# Dataset directories and large data files — never commit raw data to Git
 data/
+netflow/data
+netflow/data/
+*.csv
+*.parquet
+datasets/

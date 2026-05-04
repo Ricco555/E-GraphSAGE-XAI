@@ -1,0 +1,21 @@
+# XGBoost (and future sklearn) baseline configuration.
+#
+# Run: python scripts/run_baselines.py --config configs/baselines.yaml
+
+dataset:
+  root: datasets/nfunsw_nb15
+
+xgboost:
+  n_estimators: 600
+  max_depth: 8
+  learning_rate: 0.05
+  subsample: 0.9
+  colsample_bytree: 0.9
+  reg_lambda: 1.0
+  tree_method: hist         # hist | gpu_hist
+  per_class_sample: 40000   # max training rows per class (set null to use all)
+
+out:
+  artifacts_dir: artifacts
+  checkpoint: artifacts/best_xgb.json
+  metrics: artifacts/metrics_xgb.json

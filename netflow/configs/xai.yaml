@@ -1,0 +1,30 @@
+# XAI configuration for TE-G-SAGE-XAI.
+#
+# Run: python scripts/run_xai.py --config configs/xai.yaml
+# Inherits dataset/model/training settings from the base train config.
+
+base_config: configs/train.yaml          # train config to inherit from
+
+xai:
+  # Number of edges sampled per class for SHAP aggregation.
+  # Higher = more stable estimates but slower.  50 is usually sufficient.
+  n_per_class: 50
+
+  # Number of background edges for KernelExplainer.
+  background_size: 50
+
+  # Number of edges per class for the beeswarm matrix.
+  n_beeswarm: 50
+
+  # Top-k features shown in bar charts and spider chart.
+  top_k: 10
+
+  # Set to a list of class IDs to limit beeswarm/per-edge output,
+  # e.g. [0, 1, 3].  null = all classes.
+  classes: null
+
+  # Random seed for edge sampling.
+  seed: 42
+
+out:
+  save_dir: artifacts/xai

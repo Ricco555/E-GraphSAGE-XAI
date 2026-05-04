@@ -1,0 +1,56 @@
+# Data ingestion configuration for NF-UNSW-NB15-v3.
+#
+# Run: python scripts/prepare_data.py --config configs/data.yaml [--frac 0.1]
+# All paths are relative to the netflow/ directory.
+
+raw:
+  csv_path: data/NF-UNSW-NB15-v3.csv
+  label_col: Attack          # renamed to "label" after cleaning
+  drop_cols: [Label]         # binary label not used; multi-class is via Attack
+
+# Endpoint identifier construction: concatenate IPv4:port for src/dst.
+endpoint:
+  src_ip_col: IPV4_SRC_ADDR
+  dst_ip_col: IPV4_DST_ADDR
+  src_port_col: L4_SRC_PORT
+  dst_port_col: L4_DST_PORT
+
+# Chronological 60/30/10 split.
+split:
+  start_col: FLOW_START_MILLISECONDS
+  end_col: FLOW_END_MILLISECONDS
+  duration_col: FLOW_DURATION_MILLISECONDS
+  train_ratio: 0.60
+  val_ratio: 0.30
+  test_ratio: 0.10
+
+# Numeric pipeline.
+numeric:
+  scaler: standard           # standard | robust
+  apply_corr_prune: true
+  corr_threshold: 0.995
+  nonneg_frac: 0.995
+  # Numeric-coded categoricals — excluded from numeric pipeline, included in categorical OHE.
+  excluded_categoricals:
+    - PROTOCOL
+    - L7_PROTO
+    - ICMP_TYPE
+    - ICMP_IPV4_TYPE
+    - DNS_QUERY_TYPE
+    - DNS_QUERY_ID
+    - FTP_COMMAND_RET_CODE
+
+# Categorical pipeline (OHE on TRAIN with rare-collapse).
+categorical:
+  use_port_buckets: false
+  rare_min_freq: 50
+  rare_top_k: null
+
+# Output paths.
+out:
+  root: datasets/nfunsw_nb15            # GraphBolt OnDiskDataset root
+  split_indices_dir: artifacts/splits   # train/val/test row indices + meta
+  numeric_artifacts_dir: artifacts/numeric
+  categorical_artifacts_dir: artifacts/categorical
+  label_map_path: artifacts/label_map.json
+  corr_artifacts_dir: artifacts/corr
