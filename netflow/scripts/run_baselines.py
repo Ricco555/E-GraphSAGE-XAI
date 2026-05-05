@@ -214,7 +214,8 @@ def run_baselines(cfg: dict, plots: bool = False) -> dict:
     logging.info(f"[baselines] saved model → {ckpt_path}")
 
     # Evaluate on validation set.
-    y_prob = model.predict_proba(X_val)
+    dval = xgb.DMatrix(X_val, device=device)
+    y_prob = model.get_booster().predict(dval).reshape(-1, num_classes)
     y_pred = y_prob.argmax(axis=1)
     metrics = compute_metrics(y_val, y_pred, label2id)
 
