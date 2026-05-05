@@ -15,11 +15,11 @@ model:
 
 training:
   fanouts: [25, 15]                   # outermost → innermost layer
-  batch_size: 2048
+  batch_size: 4096
   epochs: 20
   lr: 3.0e-4
   weight_decay: 1.0e-4
-  num_workers: 0
+  num_workers: 4
   seed: 42
   device: auto                        # auto = cuda if available else cpu
 
