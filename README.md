@@ -116,7 +116,16 @@ python training/train.py --config configs/train.yaml
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--epochs N` | `20` | Number of training epochs |
+| `--lr F` | `3e-4` | Learning rate |
+| `--hidden N` | `128` | Hidden dimension |
+| `--num_layers N` | `2` | Number of SAGEConv layers |
+| `--aggregator mean\|pool\|lstm\|gcn` | `mean` | Neighbourhood aggregator |
+| `--dropout F` | `0.3` | Dropout rate |
+| `--weight_decay F` | `1e-4` | L2 regularisation |
+| `--fanouts "N,N,…"` | `"25,15"` | Per-layer fanout sizes (comma-separated) |
+| `--batch_size N` | `2048` | Mini-batch size |
 | `--frac F` | `1.0` | Subsample training set fraction |
+| `--seed N` | `42` | Random seed |
 | `--device cuda\|cpu` | `auto` | Force device |
 | `--config PATH` | — | Path to training YAML (required) |
 
