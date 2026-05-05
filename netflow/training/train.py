@@ -340,19 +340,20 @@ def _parse_args() -> argparse.Namespace:
 
 def _apply_overrides(cfg: dict, args: argparse.Namespace) -> dict:
     """Write CLI overrides into the config dict (mutates in place)."""
-    if args.epochs      is not None: cfg["training"]["epochs"]       = args.epochs
-    if args.batch_size  is not None: cfg["training"]["batch_size"]   = args.batch_size
-    if args.lr          is not None: cfg["training"]["lr"]           = args.lr
-    if args.hidden      is not None: cfg["model"]["hidden"]          = args.hidden
-    if args.seed        is not None: cfg["training"]["seed"]         = args.seed
-    if args.device      is not None: cfg["training"]["device"]       = args.device
-    if args.frac        is not None: cfg["frac"]                     = args.frac
-    if args.debug:                   cfg["debug"]                    = True
-    if args.num_layers  is not None: cfg["model"]["num_layers"]      = args.num_layers
-    if args.aggregator  is not None: cfg["model"]["aggregator"]      = args.aggregator
-    if args.dropout     is not None: cfg["model"]["dropout"]         = args.dropout
-    if args.weight_decay is not None: cfg["training"]["weight_decay"] = args.weight_decay
-    if args.fanouts     is not None:
+    def _get(attr): return getattr(args, attr, None)
+    if _get("epochs")       is not None: cfg["training"]["epochs"]       = args.epochs
+    if _get("batch_size")   is not None: cfg["training"]["batch_size"]   = args.batch_size
+    if _get("lr")           is not None: cfg["training"]["lr"]           = args.lr
+    if _get("hidden")       is not None: cfg["model"]["hidden"]          = args.hidden
+    if _get("seed")         is not None: cfg["training"]["seed"]         = args.seed
+    if _get("device")       is not None: cfg["training"]["device"]       = args.device
+    if _get("frac")         is not None: cfg["frac"]                     = args.frac
+    if _get("debug"):                    cfg["debug"]                    = True
+    if _get("num_layers")   is not None: cfg["model"]["num_layers"]      = args.num_layers
+    if _get("aggregator")   is not None: cfg["model"]["aggregator"]      = args.aggregator
+    if _get("dropout")      is not None: cfg["model"]["dropout"]         = args.dropout
+    if _get("weight_decay") is not None: cfg["training"]["weight_decay"] = args.weight_decay
+    if _get("fanouts")      is not None:
         cfg["training"]["fanouts"] = [int(f) for f in args.fanouts.split(",")]
     return cfg
 
