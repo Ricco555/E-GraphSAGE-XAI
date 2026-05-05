@@ -1,6 +1,6 @@
 torch
 dgl
-numpy
+numpy<2
 pandas
 scipy
 scikit-learn
@@ -10,3 +10,4 @@ joblib
 pyyaml
 xgboost
 pyarrow
+pydantic

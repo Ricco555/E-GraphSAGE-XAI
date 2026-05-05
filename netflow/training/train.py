@@ -328,19 +328,32 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--seed",         type=int,   default=None)
     ap.add_argument("--device",       type=str,   default=None)
     ap.add_argument("--debug",        action="store_true")
+    ap.add_argument("--num_layers",   type=int,   default=None)
+    ap.add_argument("--aggregator",   type=str,   default=None,
+                    choices=["mean", "pool", "lstm", "gcn"])
+    ap.add_argument("--dropout",      type=float, default=None)
+    ap.add_argument("--weight_decay", type=float, default=None)
+    ap.add_argument("--fanouts",      type=str,   default=None,
+                    help="Comma-separated fanouts e.g. 25,15")
     return ap.parse_args()
 
 
 def _apply_overrides(cfg: dict, args: argparse.Namespace) -> dict:
     """Write CLI overrides into the config dict (mutates in place)."""
-    if args.epochs     is not None: cfg["training"]["epochs"]     = args.epochs
-    if args.batch_size is not None: cfg["training"]["batch_size"] = args.batch_size
-    if args.lr         is not None: cfg["training"]["lr"]         = args.lr
-    if args.hidden     is not None: cfg["model"]["hidden"]        = args.hidden
-    if args.seed       is not None: cfg["training"]["seed"]       = args.seed
-    if args.device     is not None: cfg["training"]["device"]     = args.device
-    if args.frac       is not None: cfg["frac"]                   = args.frac
-    if args.debug:                  cfg["debug"]                  = True
+    if args.epochs      is not None: cfg["training"]["epochs"]       = args.epochs
+    if args.batch_size  is not None: cfg["training"]["batch_size"]   = args.batch_size
+    if args.lr          is not None: cfg["training"]["lr"]           = args.lr
+    if args.hidden      is not None: cfg["model"]["hidden"]          = args.hidden
+    if args.seed        is not None: cfg["training"]["seed"]         = args.seed
+    if args.device      is not None: cfg["training"]["device"]       = args.device
+    if args.frac        is not None: cfg["frac"]                     = args.frac
+    if args.debug:                   cfg["debug"]                    = True
+    if args.num_layers  is not None: cfg["model"]["num_layers"]      = args.num_layers
+    if args.aggregator  is not None: cfg["model"]["aggregator"]      = args.aggregator
+    if args.dropout     is not None: cfg["model"]["dropout"]         = args.dropout
+    if args.weight_decay is not None: cfg["training"]["weight_decay"] = args.weight_decay
+    if args.fanouts     is not None:
+        cfg["training"]["fanouts"] = [int(f) for f in args.fanouts.split(",")]
     return cfg
 
 
