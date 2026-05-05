@@ -179,13 +179,13 @@ this before `run_baselines.py` (or re-run it afterwards).
 
 ```bash
 # EdgeGraphSAGE  →  metrics_test.json
-python scripts/eval_metrics.py --config configs/train.yaml --split test --plots
+python scripts/eval_metrics.py --config configs/train.yaml --split test
 
 # GCN            →  metrics_test_gcn.json
-python scripts/eval_metrics.py --config configs/gcn.yaml  --split test --model_tag gcn --plots
+python scripts/eval_metrics.py --config configs/gcn.yaml  --split test --model_tag gcn
 
 # GAT            →  metrics_test_gat.json
-python scripts/eval_metrics.py --config configs/gat.yaml  --split test --model_tag gat --plots
+python scripts/eval_metrics.py --config configs/gat.yaml  --split test --model_tag gat
 ```
 
 | Flag | Default | Description |
