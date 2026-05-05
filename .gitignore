@@ -11,3 +11,4 @@ netflow/data/
 *.csv
 *.parquet
 datasets/
+CLAUDE.md
