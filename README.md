@@ -329,3 +329,7 @@ jupyter notebook
 
 Experiments performed using the Advanced Computing service provided by the
 University of Zagreb University Computing Centre (SRCE).
+
+## Release: v2
+
+Full code refactor using [Claude Code](https://claude.ai/code) making it more streamlined without reliance on Jupyter notebooks.
