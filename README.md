@@ -5,8 +5,26 @@ NetFlow records (NF-UNSW-NB15-v3) are processed into a temporal graph, used to
 train an **EdgeGraphSAGE** edge classifier, compared against GCN, GAT, and
 XGBoost baselines, and explained with variable-level SHAP.
 
-> Citation: *TE-G-SAGE: Explainable Edge-Aware Graph Neural Networks for
-> Network Intrusion Detection* [submitted for peer review]
+> **Published article:**
+> Luša, R.; Pintar, D.; Vranić, M. TE-G-SAGE: Explainable Edge-Aware Graph Neural Networks for Network Intrusion Detection. *Modelling* 2025, *6*, 165.
+> <https://doi.org/10.3390/modelling6040165> — [Full text at MDPI](https://www.mdpi.com/2673-3951/6/4/165)
+
+## Citation
+
+If you use this code in your research, please cite:
+
+```bibtex
+@article{lusa2025tegSAGE,
+  author  = {Lu{\v{s}}a, Ricco and Pintar, Damir and Vrani{\'{c}}, Mirta},
+  title   = {{TE-G-SAGE}: Explainable Edge-Aware Graph Neural Networks for Network Intrusion Detection},
+  journal = {Modelling},
+  year    = {2025},
+  volume  = {6},
+  pages   = {165},
+  doi     = {10.3390/modelling6040165},
+  url     = {https://www.mdpi.com/2673-3951/6/4/165}
+}
+```
 
 ---
 
