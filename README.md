@@ -14,15 +14,17 @@ XGBoost baselines, and explained with variable-level SHAP.
 If you use this code in your research, please cite:
 
 ```bibtex
-@article{lusa2025tegSAGE,
-  author  = {Lu{\v{s}}a, Ricco and Pintar, Damir and Vrani{\'{c}}, Mirta},
-  title   = {{TE-G-SAGE}: Explainable Edge-Aware Graph Neural Networks for Network Intrusion Detection},
-  journal = {Modelling},
-  year    = {2025},
-  volume  = {6},
-  pages   = {165},
-  doi     = {10.3390/modelling6040165},
-  url     = {https://www.mdpi.com/2673-3951/6/4/165}
+@Article{modelling6040165,
+  author         = {Luša, Riko and Pintar, Damir and Vranić, Mihaela},
+  title          = {TE-G-SAGE: Explainable Edge-Aware Graph Neural Networks for Network Intrusion Detection},
+  journal        = {Modelling},
+  year           = {2025},
+  volume         = {6},
+  number         = {4},
+  article-number = {165},
+  issn           = {2673-3951},
+  doi            = {10.3390/modelling6040165},
+  url            = {https://www.mdpi.com/2673-3951/6/4/165}
 }
 ```
 
